@@ -108,9 +108,9 @@ cargo build +nightly --release triples-gen-server --all-features;
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=6 cargo run --release --all-features --bin triples-gen-server -- -m <0/1> 2>/dev/null > "./triples_times.txt";
+env RAYON_NUM_THREADS=6 cargo +nightly run --release --all-features --bin triples-gen-server -- -m <0/1> 2>/dev/null > "./triples_times.txt";
 # On the client instance:
-env RAYON_NUM_THREADS=6 cargo run --release --all-features --bin triples-gen-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./triples_time.txt"
+env RAYON_NUM_THREADS=6 cargo +nightly run --release --all-features --bin triples-gen-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./triples_time.txt"
 ```
 This will write out a trace to `./triples_time.txt`. Note that the results from Figure 10 can be reproduced by varying the number of threads in the `RAYON_NUM_THREADS` environment variable, and additionally including the `-n 10000000` flag.
 
@@ -125,9 +125,9 @@ cargo build +nightly --release input-auth-server --all-features;
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=3 cargo run --release --all-features --bin input-auth-server -- -m <0/1> 2>/dev/null > "./input_auth_times.csv"
+env RAYON_NUM_THREADS=3 cargo +nightly run --release --all-features --bin input-auth-server -- -m <0/1> 2>/dev/null > "./input_auth_times.csv"
 # On the client instance:
-env RAYON_NUM_THREADS=3 cargo run --release --all-features --bin input-auth-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./input_auth_time.txt"
+env RAYON_NUM_THREADS=3 cargo +nightly run --release --all-features --bin input-auth-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./input_auth_time.txt"
 ```
 This will write out a trace to `./input_auth_time.txt`.
 
