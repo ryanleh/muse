@@ -68,7 +68,7 @@ cargo build --release acg-client --all-features;
 cargo build --release acg-server --all-features;
 ```
 
-Then, in separate windows, execute these binaries with the relevant options:
+Then, execute these commands to run the experiment:
 ```bash
 # Start server:
 env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-server -- -m <0/1> -p <port> > "./acg_times.csv" &;
@@ -85,7 +85,7 @@ cargo build --release garbling-client --all-features;
 cargo build --release garbling-server --all-features;
 ```
 
-Then, in separate windows, execute these binaries with the relevant options:
+Then, execute these commands to run the experiment:
 ```bash
 # Start server:
 env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-server -- -m <0/1> -p <port> > "./garbling_times.csv" &;
@@ -103,7 +103,7 @@ cargo build --release cds-client --all-features;
 cargo build --release cds-server --all-features;
 ```
 
-Then, in separate windows, execute these binaries with the relevant options:
+Then, execute these commands to run the experiment:
 ```bash
 # Start server:
 env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-server -- -m <0/1> -p <port> > "./cds_times.csv" &;
@@ -119,7 +119,7 @@ cargo build --release triples-gen-client --all-features;
 cargo build --release triples-gen-server --all-features;
 ```
 
-Then, in separate windows, execute these binaries with the relevant options:
+Then, execute these commands to run the experiment:
 ```bash
 # Start server:
 env RAYON_NUM_THREADS=1 cargo run --release --all-features triples-gen-server -- -m <0/1> -p <port> > "./triple_times.csv" &;
@@ -134,7 +134,7 @@ cargo build --release input-auth-client --all-features;
 cargo build --release input-auth-server --all-features;
 ```
 
-Then, in separate windows, execute these binaries with the relevant options:
+Then, execute these commands to run the experiment:
 ```bash
 # Start server:
 env RAYON_NUM_THREADS=1 cargo run --release --all-features input-auth-server -- -m <0/1> -p <port> > "./input_auth_times.csv" &;
@@ -152,7 +152,7 @@ cargo build --release mnist-client --all-features;
 cargo build --release mnist-server --all-features;
 ```
 
-Then, in separate windows, execute these binaries with the relevant options:
+Then, execute these commands to run the experiment:
 ```bash
 # Start server:
 env RAYON_NUM_THREADS=1 cargo run --release --all-features mnist-server -- -m <0/1> -p <port> > "./mnist.csv" &;
