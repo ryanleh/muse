@@ -272,6 +272,7 @@ where
             return Err(MpcError::NotBits);
         }
 
+        let cds_time = timer_start!(|| "CDS Protocol");
         let mut processed = 0;
         let mut bits_processed = 0;
         let mut labels_processed = 0;
@@ -353,6 +354,7 @@ where
             labels_processed += 2 * layer_size * modulus_bits * elems_per_label;
             timer_end!(layer_time);
         }
+        timer_end!(cds_time);
         Ok(())
     }
 
@@ -435,6 +437,7 @@ where
         mpc.private_open(writer, &inp_are_bits)?;
 
         // TODO: Parallelize this
+        let cds_time = timer_start!(|| "CDS Protocol");
         let mut labels = Vec::with_capacity(total_size * (modulus_bits + 1));
         let mut processed = 0;
         let mut bits_processed = 0;
@@ -512,6 +515,7 @@ where
             labels_processed += 2 * layer_size * modulus_bits * elems_per_label;
             timer_end!(layer_time);
         }
+        timer_end!(cds_time);
         Ok(labels
             .into_iter()
             .map(|l| Wire::from_block(l, 2))
