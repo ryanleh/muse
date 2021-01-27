@@ -36,6 +36,14 @@ In addition, there is a  [`rust/bench-utils`](rust/bench-utils) crate which cont
 
 ## Setup
 
+### Local setup
+
+If you'd like to compile and run experiments locally, please first install [rustup](https://rustup.rs/), and then install the latest Rust nightly as follows:
+```bash
+rustup install nightly
+```
+Note that this is only necessary if you are *not* using the AWS image.
+
 ### Instance setup
 
 ### Experiments
@@ -55,9 +63,9 @@ cargo build --release acg-server --all-features;
 Then, in separate windows, execute these binaries with the relevant options:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./acg_times.csv" cargo run --release --all-features acg-server <0/1> <port> &;
+env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./acg_times.csv" cargo run --release --all-features acg-server <0/1> <port> > /dev/null 2>&1 &;
 # Start client:
-env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-client <0/1> <server_ip> <server_port>;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-client <0/1> <server_ip> <server_port> > /dev/null 2>&1;
 ```
 This will write out the time taken by the correlation generator to `./acg_times.csv`
 
@@ -72,11 +80,12 @@ cargo build --release garbling-server --all-features;
 Then, in separate windows, execute these binaries with the relevant options:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./garbling_times.csv" cargo run --release --all-features garbling-server <0/1> <port> &;
+env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./garbling_times.csv" cargo run --release --all-features garbling-server <0/1> <port> > /dev/null 2>&1 &;
 # Start client:
-env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-client <0/1> <server_ip> <server_port>;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-client <0/1> <server_ip> <server_port> > /dev/null 2>&1;
 ```
 This will write out the time taken by the correlation generator to `./garbling_times.csv`
+To obtain the final time, run `cat garbling_times.csv | grep "Garbling"`
 
 ##### CDS
 
@@ -89,11 +98,16 @@ cargo build --release cds-server --all-features;
 Then, in separate windows, execute these binaries with the relevant options:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./cds_times.csv" cargo run --release --all-features cds-server <0/1> <port> &;
+env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./cds_times.csv" cargo run --release --all-features cds-server <0/1> <port> > /dev/null 2>&1 &;
 # Start client:
-env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-client <0/1> <server_ip> <server_port>;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-client <0/1> <server_ip> <server_port> > /dev/null 2>&1;
 ```
 This will write out the time taken by the correlation generator to `./cds_times.csv`
+To obtain the final time, run `cat cds_times.csv | grep "CDS Protocol"`
+
+##### Online phase
+
+XXX
 
 ## License
 
