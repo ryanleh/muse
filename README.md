@@ -71,9 +71,9 @@ cargo build --release acg-server --all-features;
 Then, in separate windows, execute these binaries with the relevant options:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./acg_times.csv" cargo run --release --all-features acg-server <0/1> <port> > /dev/null 2>&1 &;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-server -- -m <0/1> -p <port> > "./acg_times.csv" &;
 # Start client:
-env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-client <0/1> <server_ip> <server_port> > /dev/null 2>&1;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-client -- -m <0/1> -i <server_ip> -p <server_port> > /dev/null 2>&1;
 ```
 This will write out the time taken by the correlation generator to `./acg_times.csv`
 
@@ -88,16 +88,16 @@ cargo build --release garbling-server --all-features;
 Then, in separate windows, execute these binaries with the relevant options:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./garbling_times.csv" cargo run --release --all-features garbling-server <0/1> <port> > /dev/null 2>&1 &;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-server -- -m <0/1> -p <port> > "./garbling_times.csv" &;
 # Start client:
-env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-client <0/1> <server_ip> <server_port> > /dev/null 2>&1;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-client -- -m <0/1> -i <server_ip> -p <server_port> > /dev/null 2>&1;
 ```
-This will write out the time taken by the correlation generator to `./garbling_times.csv`
+This will write out a trace of execution times to  `./garbling_times.csv`
 To obtain the final time, run `cat garbling_times.csv | grep "Garbling"`
 
 ##### CDS
 
-To measure the cost of the CDS protocol, first build the relevant binaries:
+To measure the cost of evaluating the CDS protocol, first build the relevant binaries:
 ```bash
 cargo build --release cds-client --all-features;
 cargo build --release cds-server --all-features;
@@ -106,17 +106,60 @@ cargo build --release cds-server --all-features;
 Then, in separate windows, execute these binaries with the relevant options:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./cds_times.csv" cargo run --release --all-features cds-server <0/1> <port> > /dev/null 2>&1 &;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-server -- -m <0/1> -p <port> > "./cds_times.csv" &;
 # Start client:
-env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-client <0/1> <server_ip> <server_port> > /dev/null 2>&1;
+env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-client -- -m <0/1> -i <server_ip> -p <server_port> > /dev/null 2>&1;
 ```
-This will write out the time taken by the correlation generator to `./cds_times.csv`
+This will write out a trace of execution times to  `./cds_times.csv`
 To obtain the final time, run `cat cds_times.csv | grep "CDS Protocol"`
+
+To measure the cost of triple generation for the CDS protocol, first build the relevant binaries:
+```bash
+cargo build --release triples-gen-client --all-features;
+cargo build --release triples-gen-server --all-features;
+```
+
+Then, in separate windows, execute these binaries with the relevant options:
+```bash
+# Start server:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features triples-gen-server -- -m <0/1> -p <port> > "./triple_times.csv" &;
+# Start client:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features triples-gen-client -- -m <0/1> -i <server_ip> -p <server_port> > /dev/null 2>&1;
+```
+This will write out a trace to `./triples_times.csv`
+
+To measure the cost of input sharing for the CDS protocol, first build the relevant binaries:
+```bash
+cargo build --release input-auth-client --all-features;
+cargo build --release input-auth-server --all-features;
+```
+
+Then, in separate windows, execute these binaries with the relevant options:
+```bash
+# Start server:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features input-auth-server -- -m <0/1> -p <port> > "./input_auth_times.csv" &;
+# Start client:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features input-auth-client -- -m <0/1> -i <server_ip> -p <server_port> > /dev/null 2>&1;
+```
+This will write out a trace to `./input_auth_times.csv`
 
 ##### Online phase
 
-XXX
+To measure the cost of input sharing for the CDS protocol, first build the relevant binaries.
+(The code examples show how to do this for MNIST; for the MINIONN network, replace `mnist` with `minionn`)
+```bash
+cargo build --release mnist-client --all-features;
+cargo build --release mnist-server --all-features;
+```
 
+Then, in separate windows, execute these binaries with the relevant options:
+```bash
+# Start server:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features mnist-server -- -m <0/1> -p <port> > "./mnist.csv" &;
+# Start client:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features mnist-client -- -m <0/1> -i <server_ip> -p <server_port> > /dev/null 2>&1;
+```
+This will write out a trace to `./mnist.csv`
 ## License
 
 Muse is licensed under either of the following licenses, at your discretion.
