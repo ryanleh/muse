@@ -37,7 +37,63 @@ In addition, there is a  [`rust/bench-utils`](rust/bench-utils) crate which cont
 ## Setup
 
 ### Instance setup
+
 ### Experiments
+
+First, `cd experiments` to switch to the `experiments` folder.
+
+#### Table 3
+
+##### Correlation generator
+
+To measure the cost of correlation generation, first build the relevant binaries:
+```bash
+cargo build --release acg-client --all-features;
+cargo build --release acg-server --all-features;
+```
+
+Then, in separate windows, execute these binaries with the relevant options:
+```bash
+# Start server:
+env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./acg_times.csv" cargo run --release --all-features acg-server <0/1> <port> &;
+# Start client:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features acg-client <0/1> <server_ip> <server_port>;
+```
+This will write out the time taken by the correlation generator to `./acg_times.csv`
+
+##### Garbling
+
+To measure the cost of garbling the ReLU circuits, first build the relevant binaries:
+```bash
+cargo build --release garbling-client --all-features;
+cargo build --release garbling-server --all-features;
+```
+
+Then, in separate windows, execute these binaries with the relevant options:
+```bash
+# Start server:
+env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./garbling_times.csv" cargo run --release --all-features garbling-server <0/1> <port> &;
+# Start client:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features garbling-client <0/1> <server_ip> <server_port>;
+```
+This will write out the time taken by the correlation generator to `./garbling_times.csv`
+
+##### CDS
+
+To measure the cost of the CDS protocol, first build the relevant binaries:
+```bash
+cargo build --release cds-client --all-features;
+cargo build --release cds-server --all-features;
+```
+
+Then, in separate windows, execute these binaries with the relevant options:
+```bash
+# Start server:
+env RAYON_NUM_THREADS=1 env BENCH_OUTPUT_FILE="./cds_times.csv" cargo run --release --all-features cds-server <0/1> <port> &;
+# Start client:
+env RAYON_NUM_THREADS=1 cargo run --release --all-features cds-client <0/1> <server_ip> <server_port>;
+```
+This will write out the time taken by the correlation generator to `./cds_times.csv`
 
 ## License
 
