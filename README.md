@@ -10,9 +10,9 @@ This library implements the components of a cryptographic system for efficient c
 
 **The end-to-end protocol is not yet implemented**. In particular, the following components are missing:
 * TopGear zero-knowledge proof integration (latency costs are currently simulated)
-* The various components do not currently run in parallel
+* Components are not currently run in parallel
 
-The rest of this README will walk through running experiments for the various components of Muse to reproduce the results in Tables 3/4 and Figures 8, 9, and 10.
+The rest of this README will walk through running experiments for the various components of Muse to reproduce the results in Table 3 and Figures 8, 9, and 10.
 
 
 ## Directory structure
@@ -48,11 +48,11 @@ Note that this is only necessary if you are *not* using the AWS image.
 
 To enable running our code on AWS EC2 machines, we have created an Amazon Machine Image (AMI) that already contains an installation of Rust, as well as a copy of this code.
 
-The ID of this AMI is XYZ.
+The ID of this AMI is ami-01421496a8ce0c211.
 
-To set up an EC2 machine with our AMI, follow the instructions outlined [here](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/launching-instance.html), and, in Step 1, select "Community AMI".
+To set up an EC2 machine with our AMI, follow the instructions outlined [here](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/launching-instance.html), and, in Step 1, enter the AMI ID in the search bar and select "Community AMI".
 
-To replicate our results from the paper, both the client and the server must be XYZ instances, and the region for the client machine should be XYZ, while the region for the server should be XYZ.
+To replicate our results from the paper, both the client and the server must be c5.9xlarge instances, and the region for the client machine should be us-west-1, while the region for the server should be us-west-2.
 
 ### Experiments
 
@@ -60,9 +60,9 @@ First, `cd rust/experiments` to switch to the crate containing our benchmarks.
 
 #### Table 3
 
-##### Correlation generator
+##### Authenticated correlations generator (ACG)
 
-To measure the cost of correlation generation, first build the relevant binaries:
+To measure the cost of ACG, first build the relevant binaries:
 ```bash
 cargo build --release acg-client --all-features;
 cargo build --release acg-server --all-features;
