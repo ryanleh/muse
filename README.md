@@ -17,7 +17,7 @@ The rest of this README will walk through being able to run the various componen
 
 ## Directory structure
 
-This repository contains several folders that implement the different building blocks of Delphi. The high-level structure of the repository is as follows.
+This repository contains several folders that implement the different building blocks of MUSE. The high-level structure of the repository is as follows.
 * [`python`](python): Example Python scripts for performing neural architecture search (NAS)
 
 * [`rust/algebra`](rust/algebra): Rust crate that provides finite fields
@@ -30,9 +30,9 @@ This repository contains several folders that implement the different building b
 
 * [`rust/protocols`](rust/protocols): Rust crate that implements cryptographic protocols
 
-* [`rust/protocols-sys`](rust/crypto-primitives): Rust crate that provides the C++ backend for Delphi's pre-processing phase and an FFI for the backend
+* [`rust/protocols-sys`](rust/crypto-primitives): Rust crate that provides the C++ backend for MUSE's pre-processing phase and an FFI for the backend
 
-In addition, there is a  [`rust/bench-utils`](rust/bench-utils) crate which contains infrastructure for benchmarking. This crate includes macros for timing code segments and is used for profiling the building blocks of Delphi.
+In addition, there is a  [`rust/bench-utils`](rust/bench-utils) crate which contains infrastructure for benchmarking. This crate includes macros for timing code segments and is used for profiling the building blocks of MUSE.
 
 ## Setup
 
@@ -48,7 +48,7 @@ Note that this is only necessary if you are *not* using the AWS image.
 
 ### Experiments
 
-First, `cd experiments` to switch to the `experiments` folder.
+First, `cd rust/experiments` to switch to the crate containing our benchmarks.
 
 #### Table 3
 
