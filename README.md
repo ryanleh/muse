@@ -43,6 +43,10 @@ If you'd like to compile and run experiments locally, please first install [rust
 ```bash
 rustup install nightly
 ```
+Additionally, you will need to have the GCC, G++, pkg-config, OpenSSL, CMake, and Clang packages. On Ubuntu, these can be installed via:
+```bash
+sudo apt install pkg-config libssl-dev cmake g++ libclang-dev
+```
 Note that this is only necessary if you are *not* using the AWS image.
 
 ### Instance setup
@@ -65,16 +69,16 @@ First, make sure the repository is up to date (we will push any bug fixes) via `
 
 To measure the cost of the ACG, first build the relevant binaries:
 ```bash
-cargo build +nightly --release acg-client --all-features;
-cargo build +nightly --release acg-server --all-features;
+cargo +nightly build --bin acg-client --release --all-features;
+cargo +nightly build --bin acg-server --release --all-features;
 ```
 
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=2 cargo +nightly run --release --all-features --bin acg-server -- -m <0/1> 2>/dev/null > "./acg_time.txt"
+env RAYON_NUM_THREADS=2 cargo +nightly run --bin acg-server --release --all-features -- -m <0/1> 2>/dev/null > "./acg_time.txt"
 # On the client instance:
-env RAYON_NUM_THREADS=2 cargo +nightly run --release --all-features --bin acg-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./acg_time.txt"
+env RAYON_NUM_THREADS=2 cargo +nightly run --bin acg-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./acg_time.txt"
 ```
 This will write out a trace of execution times and bandwidth used to `./acg_time.txt`.
 
@@ -84,16 +88,16 @@ Note that the `-m` flag controls which model architecture is used: MNIST (0) or 
 
 To measure the cost of garbling the ReLU circuits, first build the relevant binaries:
 ```bash
-cargo build +nightly --release garbling-client --all-features;
-cargo build +nightly --release garbling-server --all-features;
+cargo +nightly build --bin garbling-client --release --all-features;
+cargo +nightly build --bin garbling-server --release --all-features;
 ```
 
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=2 cargo +nightly run --release --all-features --bin garbling-server -- -m <0/1> 2>/dev/null > "./garbling_time.txt"
+env RAYON_NUM_THREADS=2 cargo +nightly run --bin garbling-server --release --all-features -- -m <0/1> 2>/dev/null > "./garbling_time.txt"
 # On the client instance: 
-env RAYON_NUM_THREADS=2 cargo +nightly run --release --all-features --bin garbling-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./garbling_time.txt"
+env RAYON_NUM_THREADS=2 cargo +nightly run --bin garbling-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./garbling_time.txt"
 ```
 This will write out a trace of execution times and bandwidth used to `./garbling_time.txt`.
 
@@ -101,16 +105,16 @@ This will write out a trace of execution times and bandwidth used to `./garbling
 
 To measure the cost of triple generation for the CDS protocol, first build the relevant binaries:
 ```bash
-cargo build +nightly --release triples-gen-client --all-features;
-cargo build +nightly --release triples-gen-server --all-features;
+cargo +nightly build --bin triples-gen-client --release --all-features;
+cargo +nightly build --bin triples-gen-server --release --all-features;
 ```
 
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=6 cargo +nightly run --release --all-features --bin triples-gen-server -- -m <0/1> 2>/dev/null > "./triples_times.txt";
+env RAYON_NUM_THREADS=6 cargo +nightly run --bin triples-gen-server --release --all-features -- -m <0/1> 2>/dev/null > "./triples_times.txt";
 # On the client instance:
-env RAYON_NUM_THREADS=6 cargo +nightly run --release --all-features --bin triples-gen-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./triples_time.txt"
+env RAYON_NUM_THREADS=6 cargo +nightly run --bin triples-gen-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./triples_time.txt"
 ```
 This will write out a trace to `./triples_time.txt`. Note that the results from Figure 10 can be reproduced by varying the number of threads in the `RAYON_NUM_THREADS` environment variable, and additionally including the `-n 10000000` flag.
 
@@ -118,16 +122,16 @@ This will write out a trace to `./triples_time.txt`. Note that the results from 
 
 To measure the cost of input sharing for the CDS protocol, first build the relevant binaries:
 ```bash
-cargo build +nightly --release input-auth-client --all-features;
-cargo build +nightly --release input-auth-server --all-features;
+cargo +nightly build --bin input-auth-client --release --all-features;
+cargo +nightly build --bin input-auth-server --release --all-features;
 ```
 
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=3 cargo +nightly run --release --all-features --bin input-auth-server -- -m <0/1> 2>/dev/null > "./input_auth_times.csv"
+env RAYON_NUM_THREADS=3 cargo +nightly run --bin input-auth-server --release --all-features -- -m <0/1> 2>/dev/null > "./input_auth_times.csv"
 # On the client instance:
-env RAYON_NUM_THREADS=3 cargo +nightly run --release --all-features --bin input-auth-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./input_auth_time.txt"
+env RAYON_NUM_THREADS=3 cargo +nightly run --bin input-auth-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./input_auth_time.txt"
 ```
 This will write out a trace to `./input_auth_time.txt`.
 
@@ -135,16 +139,16 @@ This will write out a trace to `./input_auth_time.txt`.
 
 To measure the cost of evaluating the CDS protocol, first build the relevant binaries:
 ```bash
-cargo build +nightly --release cds-client --all-features;
-cargo build +nightly --release cds-server --all-features;
+cargo +nightly build --bin cds-client --release --all-features;
+cargo +nightly build --bin cds-server --release --all-features;
 ```
 
 Then, execute these commands to run the experiment:
 ```bash
 # On the server instance:
-env RAYON_NUM_THREADS=2 cargo +nightly run --release --all-features --bin cds-server -- -m <0/1> 2>/dev/null > "./cds_time.csv"
+env RAYON_NUM_THREADS=2 cargo +nightly run --bin cds-server --release --all-features -- -m <0/1> 2>/dev/null > "./cds_time.csv"
 # On the client instance:
-env RAYON_NUM_THREADS=2 cargo +nightly run --release --all-features --bin cds-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./cds_time.txt"
+env RAYON_NUM_THREADS=2 cargo +nightly run --bin cds-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./cds_time.txt"
 ```
 This will write out a trace of execution times to  `./cds_time.txt`.
 
@@ -153,16 +157,16 @@ This will write out a trace of execution times to  `./cds_time.txt`.
 To measure the cost of the online phase, first build the relevant binaries.
 (The code examples show how to do this for MNIST; for the MINIONN network, replace `mnist` with `minionn`)
 ```bash
-cargo build +nightly --release mnist-client --all-features;
-cargo build +nightly --release mnist-server --all-features;
+cargo +nightly build --bin mnist-client --release --all-features;
+cargo +nightly build --bin mnist-server --release --all-features;
 ```
 
 Then, execute these commands to run the experiment:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=8 cargo +nightly run --release --all-features --bin mnist-server -- -m <0/1> 2>/dev/null > "./mnist.txt"
+env RAYON_NUM_THREADS=8 cargo +nightly run --bin mnist-server --release --all-features -- -m <0/1> 2>/dev/null > "./mnist.txt"
 # Start client:
-env RAYON_NUM_THREADS=8 cargo +nightly run --release --all-features --bin mnist-client -- -m <0/1> -i <server_ip> 2>/dev/null > "./mnist.txt"
+env RAYON_NUM_THREADS=8 cargo +nightly run --bin mnist-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./mnist.txt"
 ```
 This will write out a trace to `./mnist.txt`.  Note that the pre-processing phase times in this trace will be incorrect.
 
