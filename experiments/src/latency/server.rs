@@ -9,6 +9,8 @@ use crypto_primitives::{
     gc::fancy_garbling::{Encoder, GarbledCircuit, Wire},
     AuthAdditiveShare, AuthShare, Share,
 };
+use futures::stream::StreamExt;
+use io_utils::{CountingIO, IMuxAsync, IMuxSync};
 use neural_network::{
     layers::*,
     tensors::{Input, Output},
@@ -30,44 +32,85 @@ use scuttlebutt::Block;
 use std::{
     collections::BTreeMap,
     io::{BufReader, BufWriter, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
+
+pub fn server_connect_sync(
+    addr: &str,
+) -> (
+    IMuxSync<CountingIO<BufReader<TcpStream>>>,
+    IMuxSync<CountingIO<BufWriter<TcpStream>>>,
+) {
+    // TODO: Maybe change to rayon_num_threads
+    let listener = TcpListener::bind("0.0.0.0:8000").unwrap();
+    let mut incoming = listener.incoming();
+    let mut readers = Vec::with_capacity(16);
+    let mut writers = Vec::with_capacity(16);
+    for _ in 0..16 {
+        let stream = incoming.next().unwrap().unwrap();
+        readers.push(CountingIO::new(BufReader::new(stream.try_clone().unwrap())));
+        writers.push(CountingIO::new(BufWriter::new(stream)));
+    }
+    (IMuxSync::new(readers), IMuxSync::new(writers))
+}
+
+pub async fn server_connect_async(
+    addr: &str,
+) -> (
+    IMuxAsync<CountingIO<async_std::io::BufReader<async_std::net::TcpStream>>>,
+    IMuxAsync<CountingIO<async_std::io::BufWriter<async_std::net::TcpStream>>>,
+) {
+    // TODO: Maybe change to rayon_num_threads
+    let listener = async_std::net::TcpListener::bind("0.0.0.0:8000")
+        .await
+        .unwrap();
+    let mut incoming = listener.incoming();
+    let mut readers = Vec::with_capacity(16);
+    let mut writers = Vec::with_capacity(16);
+    for _ in 0..16 {
+        let stream = incoming.next().await.unwrap().unwrap();
+        readers.push(CountingIO::new(async_std::io::BufReader::new(
+            stream.clone(),
+        )));
+        writers.push(CountingIO::new(async_std::io::BufWriter::new(stream)));
+    }
+    (IMuxAsync::new(readers), IMuxAsync::new(writers))
+}
 
 pub fn nn_server<R: RngCore + CryptoRng>(
     server_addr: &str,
     nn: NeuralNetwork<TenBitAS, TenBitExpFP>,
     rng: &mut R,
 ) {
-    let server_listener = TcpListener::bind(server_addr).unwrap();
     let (server_offline_state, offline_bytes) = {
-        let stream = server_listener
-            .incoming()
-            .next()
-            .unwrap()
-            .expect("server connection failed!");
-        let read_stream = BufReader::new(&stream);
-        let mut write_stream = CountWrite::new(BufWriter::new(&stream));
+        let (mut reader, mut writer) = server_connect_sync(server_addr);
         (
-            NNProtocol::offline_server_protocol(read_stream, &mut write_stream, &nn, rng).unwrap(),
-            write_stream.count(),
+            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &nn, rng).unwrap(),
+            writer.count(),
         )
     };
 
     let (_, online_bytes) = {
-        let stream = server_listener
-            .incoming()
-            .next()
-            .unwrap()
-            .expect("server connection failed!");
-        let read_stream = BufReader::new(&stream);
-        let mut write_stream = CountWrite::new(BufWriter::new(&stream));
+        let (mut reader, mut writer) = server_connect_sync(server_addr);
         (
-            NNProtocol::online_server_protocol(read_stream, &mut write_stream, &nn, &server_offline_state).unwrap(),
-            write_stream.count()
+            NNProtocol::online_server_protocol(
+                &mut reader,
+                &mut writer,
+                &nn,
+                &server_offline_state,
+            )
+            .unwrap(),
+            writer.count(),
         )
     };
-    add_to_trace!(|| "Offline Phase Bytes written: ", || format!("{}", offline_bytes));
-    add_to_trace!(|| "Online Phase Bytes written: ", || format!("{}", online_bytes));
+    add_to_trace!(|| "Offline Phase Bytes written: ", || format!(
+        "{}",
+        offline_bytes
+    ));
+    add_to_trace!(|| "Online Phase Bytes written: ", || format!(
+        "{}",
+        online_bytes
+    ));
 }
 
 pub fn acg<R: RngCore + CryptoRng>(
@@ -75,14 +118,7 @@ pub fn acg<R: RngCore + CryptoRng>(
     nn: NeuralNetwork<TenBitAS, TenBitExpFP>,
     rng: &mut R,
 ) {
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = CountWrite::new(BufWriter::new(stream));
+    let (mut reader, mut writer) = server_connect_sync(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -182,14 +218,7 @@ pub fn acg<R: RngCore + CryptoRng>(
 }
 
 pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = CountWrite::new(BufWriter::new(stream));
+    let (mut reader, mut writer) = server_connect_sync(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -294,7 +323,8 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
         .zip(randomizer_labels.chunks(randomizer_label_per_relu * 8192))
     {
         let sent_message = ServerGcMsgSend::new(&msg_contents);
-        protocols::bytes::serialize(&mut writer, &sent_message).unwrap();
+        let bytes: Vec<u8> = bincode::serialize(&sent_message).unwrap();
+        writer.write(&bytes).unwrap();
         writer.flush().unwrap();
     }
     timer_end!(send_gc_time);
@@ -303,14 +333,7 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
 }
 
 pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &mut R) {
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = BufWriter::new(stream);
+    let (mut reader, mut writer) = server_connect_sync(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -327,21 +350,8 @@ use async_std::{prelude::*, task};
 use protocols::async_server_keygen;
 
 pub fn async_triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &mut R) {
-    let (mut reader, mut writer) = task::block_on(async {
-        let server_listener = async_std::net::TcpListener::bind(server_addr)
-            .await
-            .unwrap();
-        let stream = server_listener
-            .incoming()
-            .next()
-            .await
-            .unwrap()
-            .expect("Client connection failed!");
-        (
-            async_std::io::BufReader::new(stream.clone()),
-            CountWrite::new(async_std::io::BufWriter::new(stream)),
-        )
-    });
+    let (mut reader, mut writer) =
+        task::block_on(async { server_connect_async(server_addr).await });
 
     let (sfhe, mac_key) = task::block_on(async {
         (
@@ -359,14 +369,7 @@ pub fn async_triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, 
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = CountWrite::new(BufWriter::new(stream));
+    let (mut reader, mut writer) = server_connect_sync(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -403,14 +406,7 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     use protocols::client_keygen;
     use protocols_sys::SealCT;
 
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = BufWriter::new(stream);
+    let (mut reader, mut writer) = server_connect_sync(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -478,35 +474,20 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     timer_end!(input_time);
 }
 
-pub fn async_input_auth<R: RngCore + CryptoRng>(server_addr: &str, server_addr_2: &str, layers: &[usize], rng: &mut R) {
+pub fn async_input_auth<R: RngCore + CryptoRng>(
+    server_addr: &str,
+    server_addr_2: &str,
+    layers: &[usize],
+    rng: &mut R,
+) {
     use protocols::async_client_keygen;
     use protocols_sys::SealCT;
-   
-    // TODO: Need a sync stream for now because async is not implemented for online MPC
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut sync_reader = BufReader::new(stream.try_clone().unwrap());
-    let mut sync_writer = CountWrite::new(BufWriter::new(stream));
 
-    let (mut reader, mut writer) = task::block_on(async {
-        let server_listener = async_std::net::TcpListener::bind(server_addr_2)
-            .await
-            .unwrap();
-        let stream = server_listener
-            .incoming()
-            .next()
-            .await
-            .unwrap()
-            .expect("Client connection failed!");
-        (
-            async_std::io::BufReader::new(stream.clone()),
-            CountWrite::new(async_std::io::BufWriter::new(stream)),
-        )
-    });
+    // TODO: Need a sync stream for now because async is not implemented for online MPC
+    let (mut sync_reader, mut sync_writer) = server_connect_sync(server_addr);
+
+    let (mut reader, mut writer) =
+        task::block_on(async { server_connect_async(server_addr).await });
 
     let (sfhe, mut cfhe) = task::block_on(async {
         (
@@ -542,32 +523,70 @@ pub fn async_input_auth<R: RngCore + CryptoRng>(server_addr: &str, server_addr_2
     // Share inputs
     let share_time = timer_start!(|| "Server sharing inputs");
     let out_mac_keys = mpc
-        .private_inputs(&mut sync_reader, &mut sync_writer, out_mac_keys.as_slice(), rng)
+        .private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            out_mac_keys.as_slice(),
+            rng,
+        )
         .unwrap();
     let inp_mac_keys = mpc
-        .private_inputs(&mut sync_reader, &mut sync_writer, inp_mac_keys.as_slice(), rng)
+        .private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            inp_mac_keys.as_slice(),
+            rng,
+        )
         .unwrap();
     let out_mac_shares = mpc
-        .private_inputs(&mut sync_reader, &mut sync_writer, out_mac_shares.as_slice(), rng)
+        .private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            out_mac_shares.as_slice(),
+            rng,
+        )
         .unwrap();
     let inp_mac_shares = mpc
-        .private_inputs(&mut sync_reader, &mut sync_writer, inp_mac_shares.as_slice(), rng)
+        .private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            inp_mac_shares.as_slice(),
+            rng,
+        )
         .unwrap();
     let zero_labels = mpc
-        .private_inputs(&mut sync_reader, &mut sync_writer, zero_labels.as_slice(), rng)
+        .private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            zero_labels.as_slice(),
+            rng,
+        )
         .unwrap();
     let one_labels = mpc
-        .private_inputs(&mut sync_reader, &mut sync_writer, one_labels.as_slice(), rng)
+        .private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            one_labels.as_slice(),
+            rng,
+        )
         .unwrap();
     timer_end!(share_time);
 
     // Receive client shares
     let recv_time = timer_start!(|| "Server receiving inputs");
     let out_bits = mpc
-        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations * modulus_bits)
+        .recv_private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            activations * modulus_bits,
+        )
         .unwrap();
     let inp_bits = mpc
-        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations * modulus_bits)
+        .recv_private_inputs(
+            &mut sync_reader,
+            &mut sync_writer,
+            activations * modulus_bits,
+        )
         .unwrap();
     let c_out_mac_shares = mpc
         .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
@@ -577,21 +596,17 @@ pub fn async_input_auth<R: RngCore + CryptoRng>(server_addr: &str, server_addr_2
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);
-    add_to_trace!(|| "Bytes written: ", || format!("{}", writer.count() + sync_writer.count()));
+    add_to_trace!(|| "Bytes written: ", || format!(
+        "{}",
+        writer.count() + sync_writer.count()
+    ));
 }
 
 pub fn input_auth_ltme<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
     use protocols::client_keygen;
     use protocols_sys::SealCT;
 
-    let server_listener = TcpListener::bind(server_addr).unwrap();
-    let stream = server_listener
-        .incoming()
-        .next()
-        .unwrap()
-        .expect("Client connection failed!");
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut writer = BufWriter::new(stream);
+    let (mut reader, mut writer) = server_connect_sync(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();

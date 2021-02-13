@@ -1,7 +1,10 @@
+use io_utils::{IMuxAsync, IMuxSync};
+
 #[inline]
-pub fn serialize<W: std::io::Write, T: ?Sized>(mut w: W, value: &T) -> Result<(), bincode::Error>
+pub fn serialize<W, T>(w: &mut IMuxSync<W>, value: &T) -> Result<(), bincode::Error>
 where
-    T: serde::Serialize,
+    W: std::io::Write + Send,
+    T: serde::Serialize + ?Sized,
 {
     let bytes: Vec<u8> = bincode::serialize(value)?;
     let _ = w.write(&bytes)?;
@@ -9,42 +12,32 @@ where
 }
 
 #[inline]
-pub fn deserialize<R, T>(reader: R) -> bincode::Result<T>
+pub fn deserialize<R, T>(reader: &mut IMuxSync<R>) -> bincode::Result<T>
 where
-    R: std::io::Read,
+    R: std::io::Read + Send,
     T: serde::de::DeserializeOwned,
 {
-    bincode::deserialize_from(reader)
+    let bytes: Vec<u8> = reader.read()?;
+    bincode::deserialize(&bytes[..])
 }
 
-// TODO
-use async_std::prelude::*;
-use std::convert::TryFrom;
-
 #[inline]
-pub async fn async_serialize<W, T>(mut w: W, value: &T) -> Result<(), bincode::Error>
+pub async fn async_serialize<W, T>(w: &mut IMuxAsync<W>, value: &T) -> Result<(), bincode::Error>
 where
-    W: async_std::io::Write + Unpin,
+    W: futures::io::AsyncWrite + Unpin,
     T: serde::Serialize + ?Sized,
 {
     let bytes: Vec<u8> = bincode::serialize(value)?;
-    w.write_all(&(bytes.len() as u64).to_le_bytes()).await?;
-    w.write_all(&bytes).await?;
+    w.write(&bytes).await?;
     Ok(())
 }
 
 #[inline]
-pub async fn async_deserialize<R, T>(mut reader: R) -> bincode::Result<T>
+pub async fn async_deserialize<R, T>(reader: &mut IMuxAsync<R>) -> bincode::Result<T>
 where
-    R: async_std::io::Read + Unpin,
+    R: futures::io::AsyncRead + Unpin,
     T: serde::de::DeserializeOwned,
 {
-    // Read the message length
-    let mut len_buf = [0u8; 8];
-    reader.read_exact(&mut len_buf).await?;
-    let len: u64 = u64::from_le_bytes(len_buf);
-    // Read the rest of the message
-    let mut buf = vec![0u8; usize::try_from(len).unwrap()];
-    reader.read_exact(&mut buf[..]).await?;
-    bincode::deserialize_from(&buf[..])
+    let bytes = reader.read().await?;
+    bincode::deserialize(&bytes[..])
 }

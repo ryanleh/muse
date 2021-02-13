@@ -297,7 +297,8 @@ pub fn batch_inversion<F: Field>(v: &mut [F]) {
     tmp = tmp.inverse().unwrap(); // Guaranteed to be nonzero.
 
     // Second pass: iterate backwards to compute inverses
-    for (f, s) in v.iter_mut()
+    for (f, s) in v
+        .iter_mut()
         // Backwards
         .rev()
         // Ignore normalized elements

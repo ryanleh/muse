@@ -164,9 +164,9 @@ cargo +nightly build --bin mnist-server --release --all-features;
 Then, execute these commands to run the experiment:
 ```bash
 # Start server:
-env RAYON_NUM_THREADS=8 cargo +nightly run --bin mnist-server --release --all-features -- -m <0/1> 2>/dev/null > "./mnist.txt"
+env RAYON_NUM_THREADS=8 cargo +nightly run --bin mnist-server --release --all-features -- 2>/dev/null > "./mnist.txt"
 # Start client:
-env RAYON_NUM_THREADS=8 cargo +nightly run --bin mnist-client --release --all-features -- -m <0/1> -i <server_ip> 2>/dev/null > "./mnist.txt"
+env RAYON_NUM_THREADS=8 cargo +nightly run --bin mnist-client --release --all-features -- -i <server_ip> 2>/dev/null > "./mnist.txt"
 ```
 This will write out a trace to `./mnist.txt`.  Note that the pre-processing phase times in this trace will be incorrect.
 

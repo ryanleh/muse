@@ -9,6 +9,7 @@ use crypto_primitives::{
     gc::{fancy_garbling, fancy_garbling::Wire},
     PBeaversMul,
 };
+use io_utils::{IMuxAsync, IMuxSync};
 use itertools::{interleave, izip};
 use num_traits::{One, Zero};
 use protocols_sys::{ClientFHE, ServerFHE};
@@ -114,8 +115,8 @@ where
     }
 
     fn cds_subcircuit<R, W, M>(
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         mpc: &mut M,
         modulus_bits: usize,
         elems_per_label: usize,
@@ -200,8 +201,8 @@ where
     }
 
     pub fn server_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         sfhe: &ServerFHE,
         layer_sizes: &[usize],
         out_mac_keys: &[P::Field],
@@ -359,8 +360,8 @@ where
     }
 
     pub fn client_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         cfhe: &ClientFHE,
         layer_sizes: &[usize],
         out_mac_shares: &[P::Field],
@@ -524,9 +525,9 @@ where
 
     /// Insecure protocol where server receives client input in cleartext,
     /// checks MACs, and sends back correct labels
-    pub fn insecure_server_cds<R: Read, W: Write, RNG: CryptoRng + RngCore>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn insecure_server_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         _sfhe: &ServerFHE,
         layer_sizes: &[usize],
         output_mac_keys: &[P::Field],
@@ -594,7 +595,10 @@ where
             .map(|b| b == 1)
             .collect();
 
-        let mut channel = Channel::new(reader, &mut *writer);
+        let mut readers = reader.get_mut_ref();
+        let mut writers = writer.get_mut_ref();
+
+        let mut channel = Channel::new(&mut readers[0], &mut writers[0]);
         izip!(gc_bits, labels.iter()).for_each(|(b, (zero, one))| {
             let block = if b { one } else { zero };
             channel.write_block(&block).unwrap();
@@ -604,9 +608,9 @@ where
 
     /// Insecure protocol where server receives client input in cleartext,
     /// checks MACs, and sends back correct labels
-    pub fn insecure_client_cds<R: Read, W: Write, RNG: CryptoRng + RngCore>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn insecure_client_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         _cfhe: &ClientFHE,
         _layer_sizes: &[usize],
         output_mac_shares: &[P::Field],
@@ -627,8 +631,11 @@ where
         crate::bytes::serialize(&mut *writer, &send_message)?;
         writer.flush().unwrap();
 
+        let mut readers = reader.get_mut_ref();
+        let mut writers = writer.get_mut_ref();
+
         // Receive back labels
-        let mut channel = Channel::new(reader, writer);
+        let mut channel = Channel::new(&mut readers[0], &mut writers[0]);
         let num_labels = (output_shares.len() + input_rands.len()) * modulus_bits;
         let labels: Vec<Block> = (0..num_labels)
             .map(|_| channel.read_block())

@@ -5,6 +5,7 @@ use crypto_primitives::{
     additive_share::{AuthAdditiveShare, AuthShare, Share},
     beavers_mul::Triple,
 };
+use io_utils::{IMuxAsync, IMuxSync};
 use itertools::izip;
 use num_traits::Zero;
 use protocols_sys::{ClientFHE, ClientGen, SealClientGen, SealServerGen, ServerFHE, ServerGen};
@@ -45,8 +46,8 @@ pub trait OfflineMPC<T: AuthShare> {
     /// Generates `num` authenticated pairwise randomness shares
     fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<T>>;
@@ -54,8 +55,8 @@ pub trait OfflineMPC<T: AuthShare> {
     /// An version of `rands_gen` which uses asyncronous IO
     fn async_rands_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<T>>
@@ -67,8 +68,8 @@ pub trait OfflineMPC<T: AuthShare> {
     /// Generates `num` authenticated triples
     fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<T>>;
@@ -76,8 +77,8 @@ pub trait OfflineMPC<T: AuthShare> {
     /// An version of `triples_gen` which uses asyncronous IO
     fn async_triples_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<T>>
@@ -119,7 +120,7 @@ impl<P: Fp64Parameters> ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
     pub fn optimized_input<W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
         keys: &ServerFHE,
-        writer: &mut W,
+        writer: &mut IMuxSync<W>,
         input: &[Fp64<P>],
         mac_key_ct: &mut SealCT,
         rng: &mut RNG,
@@ -164,7 +165,7 @@ impl<P: Fp64Parameters> ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
         client_auth_shares
     }
 
-    pub fn recv_mac<R: Read>(&self, reader: &mut R) -> Vec<c_char> {
+    pub fn recv_mac<R: Read + Send>(&self, reader: &mut IMuxSync<R>) -> Vec<c_char> {
         let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
         recv_message.msg().1
     }
@@ -174,7 +175,7 @@ impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
     pub fn recv_optimized_input<R: Read + Send>(
         &self,
         keys: &ClientFHE,
-        reader: &mut R,
+        reader: &mut IMuxSync<R>,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
         // Receive batches of shares
@@ -199,7 +200,7 @@ impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
         shares
     }
 
-    pub fn send_mac<W: Write>(&self, writer: &mut W, mac_key: Vec<c_char>) {
+    pub fn send_mac<W: Write + Send>(&self, writer: &mut IMuxSync<W>, mac_key: Vec<c_char>) {
         let msg = (0, mac_key);
         let send_message = MsgSend::new(&msg);
         crate::bytes::serialize(writer, &send_message).unwrap();
@@ -209,8 +210,8 @@ impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
     fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
@@ -322,8 +323,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
 
     fn async_rands_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
@@ -371,18 +372,12 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                         rands.push(Fp64::<P>::uniform(rng).into_repr().0);
                     }
 
-                    for (i, rands_batch) in rands
-                        .chunks(Self::BATCH_SIZE)
-                        .enumerate()
-                    {
+                    for (i, rands_batch) in rands.chunks(Self::BATCH_SIZE).enumerate() {
                         let batch_idx = thread_idx * batches_per_thread + i;
                         // Preprocess state and ciphertexts
-                        let (seal_state, ct) =
-                            self.backend.rands_preprocess(rands_batch);
+                        let (seal_state, ct) = self.backend.rands_preprocess(rands_batch);
                         // Push ciphertexts and state to channel
-                        task::block_on(async {
-                            send.send((batch_idx, seal_state, ct)).await
-                        });
+                        task::block_on(async { send.send((batch_idx, seal_state, ct)).await });
                         // Simulate ZK proof time
                         if i % 6 == 0 {
                             // Proving time
@@ -390,7 +385,6 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                             // Sending time
                             std::thread::sleep(std::time::Duration::from_millis(100));
                         }
-
                     }
 
                     task::block_on(async {
@@ -410,12 +404,16 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                             );
                             let recv_shares = izip!(r_share, r_mac_share)
                                 .map(|(v, m)| {
-                                    AuthAdditiveShare::new(Fp64::from_repr(v.into()), Fp64::from_repr(m.into()))
+                                    AuthAdditiveShare::new(
+                                        Fp64::from_repr(v.into()),
+                                        Fp64::from_repr(m.into()),
+                                    )
                                 })
                                 .collect::<Vec<_>>();
                             let mut result_lock = result.lock().unwrap();
                             for (old, new) in izip!(
-                                (*result_lock)[Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), num)]
+                                (*result_lock)
+                                    [Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), num)]
                                     .iter_mut(),
                                 recv_shares.iter()
                             ) {
@@ -466,7 +464,6 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     drop(send_2);
                 };
 
-
                 // Run the send/recv futures concurrently
                 futures::future::join(send_future, recv_future).await;
             });
@@ -477,8 +474,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
 
     fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
@@ -633,8 +630,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
 
     fn async_triples_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>>
@@ -856,8 +853,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
     fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
@@ -970,8 +967,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
 
     fn async_rands_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
@@ -988,9 +985,12 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
         let batches_per_thread = (batches as f64 / num_threads as f64).ceil() as usize;
 
         let pre_time = timer_start!(|| "Preprocessing");
-        let mut rands = vec![Vec::with_capacity(Self::BATCH_SIZE * batches_per_thread); num_threads];
-        let mut shares = vec![Vec::with_capacity(Self::BATCH_SIZE * batches_per_thread); num_threads];
-        let mut mac_shares = vec![Vec::with_capacity(Self::BATCH_SIZE * batches_per_thread); num_threads];
+        let mut rands =
+            vec![Vec::with_capacity(Self::BATCH_SIZE * batches_per_thread); num_threads];
+        let mut shares =
+            vec![Vec::with_capacity(Self::BATCH_SIZE * batches_per_thread); num_threads];
+        let mut mac_shares =
+            vec![Vec::with_capacity(Self::BATCH_SIZE * batches_per_thread); num_threads];
         let mut result = Vec::with_capacity(num);
         for i in 0..num {
             let idx = i / Self::BATCH_SIZE / batches_per_thread;
@@ -1020,7 +1020,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                 let rands = rands.pop().unwrap();
                 let shares = shares.pop().unwrap();
                 let mac_shares = mac_shares.pop().unwrap();
-                
+
                 // Get references to necessary channels
                 let rx = rx_inp[thread_idx].clone();
                 let tx = tx_out.clone();
@@ -1034,20 +1034,14 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                     .enumerate()
                     {
                         let batch_idx = thread_idx * batches_per_thread + i;
-                        let mut seal_state = self.backend.rands_preprocess(
-                            rand,
-                            share,
-                            mac_share,
-                        );
+                        let mut seal_state = self.backend.rands_preprocess(rand, share, mac_share);
                         task::block_on(async {
                             // Receive and process ciphertexts from client
                             let mut ct = rx.recv().await.unwrap();
                             tx.send((
                                 batch_idx,
-                                self.backend.rands_online(
-                                    &mut seal_state,
-                                    ct.as_mut_slice(),
-                                ),
+                                self.backend
+                                    .rands_online(&mut seal_state, ct.as_mut_slice()),
                             ))
                             .await
                             .unwrap();
@@ -1108,8 +1102,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
 
     fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
@@ -1285,8 +1279,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
 
     fn async_triples_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>>
@@ -1556,8 +1550,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
 {
     fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
@@ -1571,23 +1565,23 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
 
     fn async_rands_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
     where
         R: async_std::io::Read + Send + Unpin,
         W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng
+        RNG: RngCore + CryptoRng,
     {
         unimplemented!()
     }
 
     fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
@@ -1601,8 +1595,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
 
     fn async_triples_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>>
@@ -1620,8 +1614,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
 {
     fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
@@ -1646,23 +1640,23 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
 
     fn async_rands_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
     where
         R: async_std::io::Read + Send + Unpin,
         W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng
+        RNG: RngCore + CryptoRng,
     {
         unimplemented!()
     }
 
     fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
@@ -1692,8 +1686,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
 
     fn async_triples_gen<R, W, RNG>(
         &self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>>

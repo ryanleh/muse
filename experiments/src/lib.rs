@@ -18,85 +18,14 @@ use nn::{
     NeuralNetwork,
 };
 
-pub mod inference;
+//pub mod inference;
 pub mod latency;
-pub mod linear_only;
+//pub mod linear_only;
 pub mod minionn;
 pub mod mnist;
-pub mod resnet32;
-pub mod throughput;
-pub mod validation;
-
-use core::pin::Pin;
-use core::task::{Context, Poll};
-use futures::io::AsyncWrite;
-
-type Result<T = (), E = std::io::Error> = std::result::Result<T, E>;
-
-pub struct CountWrite<W> {
-    inner: W,
-    count: u64,
-}
-
-impl<W> CountWrite<W> {
-    pub fn new(inner: W) -> Self {
-        Self { inner, count: 0 }
-    }
-
-    /// Returns the number of bytes successfull written so far
-    pub fn count(&self) -> u64 {
-        self.count
-    }
-
-    /// Extracts the inner writer, discarding this wrapper
-    pub fn into_inner(self) -> W {
-        self.inner
-    }
-
-    pub fn reset(&mut self) {
-        self.count = 0;
-    }
-}
-
-impl<W> From<W> for CountWrite<W> {
-    fn from(inner: W) -> Self {
-        Self { inner, count: 0 }
-    }
-}
-
-impl<W: Write> Write for CountWrite<W> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        let written = self.inner.write(buf)?;
-        self.count += written as u64;
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> Result {
-        self.inner.flush()
-    }
-}
-
-impl<W: AsyncWrite + Unpin> AsyncWrite for CountWrite<W> {
-    fn poll_write(self: Pin<&mut Self>, ctx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
-        let Self { inner, count } = unsafe { self.get_unchecked_mut() };
-        let pin = unsafe { Pin::new_unchecked(inner) };
-        let ret = pin.poll_write(ctx, buf);
-        if let Poll::Ready(ret) = &ret {
-            if let Ok(written) = &ret {
-                *count += *written as u64;
-            }
-        }
-        ret
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Result> {
-        unsafe { self.map_unchecked_mut(|cw| &mut cw.inner) }.poll_flush(ctx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Result> {
-        unsafe { self.map_unchecked_mut(|cw| &mut cw.inner) }.poll_close(ctx)
-    }
-}
+//pub mod resnet32;
+//pub mod throughput;
+//pub mod validation;
 
 pub struct TenBitExpParams {}
 

@@ -28,7 +28,7 @@ fn main() {
 
     let port = args.value_of("port").unwrap_or("8000");
     let server_addr = format!("0.0.0.0:{}", port);
-    
+
     let network = construct_minionn(Some(&vs.root()), 1, &mut rng);
 
     experiments::latency::server::nn_server(&server_addr, network, &mut rng);
