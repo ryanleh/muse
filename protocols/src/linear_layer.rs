@@ -5,6 +5,7 @@ use algebra::{
     FpParameters, PrimeField, UniformRandom,
 };
 use crypto_primitives::additive_share::{AuthShare, Share};
+use io_utils::{IMuxAsync, IMuxSync};
 use neural_network::{
     layers::*,
     tensors::{Input, Output},
@@ -44,9 +45,13 @@ where
     /// evaluates `Lr`, returning authenticated shares of `r`, shares of `Lr`,
     /// and authenticated shares of shares of `Lr` --> [[r]]_2, <Lr>_2,
     /// [[<Lr>_2]]_2
-    pub fn offline_server_acg_protocol<R: Read, W: Write, RNG: RngCore + CryptoRng>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn offline_server_acg_protocol<
+        R: Read + Send,
+        W: Write + Send,
+        RNG: RngCore + CryptoRng,
+    >(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         input_dims: (usize, usize, usize, usize),
         output_dims: (usize, usize, usize, usize),
         server_acg: &mut SealServerACG,
@@ -132,9 +137,13 @@ where
     /// Runs client ACG protocol. Generates random input `r` and receives back
     /// authenticated shares of `r`, shares of `Lr`, and authenticated shares of
     /// shares of `Lr` --> [[r]]_1, <Lr>_1, [[<Lr>_1]]_1
-    pub fn offline_client_acg_protocol<R: Read, W: Write, RNG: RngCore + CryptoRng>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn offline_client_acg_protocol<
+        R: Read + Send,
+        W: Write + Send,
+        RNG: RngCore + CryptoRng,
+    >(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         input_dims: (usize, usize, usize, usize),
         output_dims: (usize, usize, usize, usize),
         client_acg: &mut SealClientACG,
@@ -191,9 +200,9 @@ where
 
     /// Client sends a value to the server and receives back a share of it's
     /// MAC'd value
-    pub fn offline_client_auth_share<R: Read, W: Write>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn offline_client_auth_share<R: Read + Send, W: Write + Send>(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         input: Input<P::Field>,
         cfhe: &ClientFHE,
     ) -> Result<Input<AuthAdditiveShare<P::Field>>, bincode::Error> {
@@ -224,9 +233,9 @@ where
     }
 
     /// Server receives an encrypted vector from the client and shares its MAC
-    pub fn offline_server_auth_share<R: Read, W: Write, RNG: RngCore + CryptoRng>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn offline_server_auth_share<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         input_dims: (usize, usize, usize, usize),
         sfhe: &ServerFHE,
         rng: &mut RNG,
@@ -265,8 +274,8 @@ where
         ))
     }
 
-    pub fn online_client_protocol<W: Write>(
-        writer: &mut W,
+    pub fn online_client_protocol<W: Write + Send>(
+        writer: &mut IMuxSync<W>,
         x_s: &Input<AdditiveShare<P>>,
         layer: &LinearLayerInfo<AdditiveShare<P>, FixedPoint<P>>,
     ) -> Result<(), bincode::Error> {
@@ -283,8 +292,8 @@ where
         Ok(())
     }
 
-    pub fn online_server_protocol<R: Read>(
-        reader: R,
+    pub fn online_server_protocol<R: Read + Send>(
+        reader: &mut IMuxSync<R>,
         layer: &LinearLayer<AdditiveShare<P>, FixedPoint<P>>,
         output_rerandomizer: &Output<P::Field>,
         input_derandomizer: &Input<P::Field>,

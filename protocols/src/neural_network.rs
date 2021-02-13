@@ -28,6 +28,7 @@ use crypto_primitives::{
 };
 
 use crate::{gc::ReluProtocol, linear_layer::LinearProtocol};
+use io_utils::{IMuxAsync, IMuxSync};
 use protocols_sys::{
     client_acg, server_acg, ClientACG, ClientFHE, SealClientACG, SealServerACG, ServerACG,
     ServerFHE,
@@ -121,8 +122,8 @@ where
     P::Field: AuthShare,
 {
     pub fn offline_server_protocol<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        mut reader: R,
-        mut writer: W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
     ) -> Result<ServerState<P>, MpcError> {
@@ -138,7 +139,7 @@ where
         let mut num_truncations = BTreeMap::new();
         let mut mac_keys: BTreeMap<usize, (P::Field, P::Field)> = BTreeMap::new();
         let mut relu_layers = Vec::new();
-        let sfhe: ServerFHE = crate::server_keygen(&mut reader)?;
+        let sfhe: ServerFHE = crate::server_keygen(reader)?;
 
         let start_time = timer_start!(|| "Server offline phase");
         let linear_time = timer_start!(|| "Linear layers offline phase");
@@ -181,8 +182,8 @@ where
                                 _ => unreachable!(),
                             };
                             LinearProtocol::<P>::offline_server_acg_protocol(
-                                &mut reader,
-                                &mut writer,
+                                reader,
+                                writer,
                                 layer.input_dimensions(),
                                 layer.output_dimensions(),
                                 &mut acg_handler,
@@ -215,8 +216,8 @@ where
                                 // function to the MAC share
                                 let (key, input_share) =
                                     LinearProtocol::<P>::offline_server_auth_share(
-                                        &mut reader,
-                                        &mut writer,
+                                        reader,
+                                        writer,
                                         dims.input_dimensions(),
                                         &sfhe,
                                         rng,
@@ -285,8 +286,8 @@ where
             encoders: relu_encoders,
             output_randomizers: relu_output_randomizers,
         } = ReluProtocol::<P>::offline_server_protocol(
-            &mut reader,
-            &mut writer,
+            reader,
+            writer,
             num_relu,
             &sfhe,
             layer_sizes.as_slice(),
@@ -314,8 +315,8 @@ where
     }
 
     pub fn offline_client_protocol<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        mut reader: R,
-        mut writer: W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
     ) -> Result<ClientState<P>, MpcError> {
@@ -323,7 +324,7 @@ where
         let mut in_shares = BTreeMap::new();
         let mut out_shares: BTreeMap<usize, Output<AuthAdditiveShare<P::Field>>> = BTreeMap::new();
         let mut relu_layers = Vec::new();
-        let cfhe: ClientFHE = crate::client_keygen(&mut writer)?;
+        let cfhe: ClientFHE = crate::client_keygen(writer)?;
 
         let start_time = timer_start!(|| "Client offline phase");
         let linear_time = timer_start!(|| "Linear layers offline phase");
@@ -359,8 +360,8 @@ where
                                 _ => unreachable!(),
                             };
                             LinearProtocol::<P>::offline_client_acg_protocol(
-                                &mut reader,
-                                &mut writer,
+                                reader,
+                                writer,
                                 layer.input_dimensions(),
                                 layer.output_dimensions(),
                                 &mut acg_handler,
@@ -389,10 +390,7 @@ where
                                     .iter_mut()
                                     .for_each(|e| *e = P::Field::uniform(rng));
                                 let randomizer = LinearProtocol::<P>::offline_client_auth_share(
-                                    &mut reader,
-                                    &mut writer,
-                                    randomizer,
-                                    &cfhe,
+                                    reader, writer, randomizer, &cfhe,
                                 )
                                 .unwrap();
                                 linear_layer_info
@@ -457,8 +455,8 @@ where
             server_randomizer_labels: randomizer_labels,
             client_input_labels: relu_labels,
         } = ReluProtocol::<P>::offline_client_protocol(
-            &mut reader,
-            &mut writer,
+            reader,
+            writer,
             num_relu,
             &cfhe,
             layer_sizes.as_slice(),
@@ -514,8 +512,8 @@ where
     }
 
     pub fn online_server_protocol<R: Read + Send, W: Write + Send>(
-        mut reader: R,
-        mut writer: W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         state: &ServerState<P>,
     ) -> Result<(), MpcError> {
@@ -544,8 +542,8 @@ where
                         &state.relu_encoders[num_consumed_relus..(num_consumed_relus + layer_size)];
                     // The server receives output of ReLU
                     let output = ReluProtocol::online_server_protocol(
-                        &mut reader,
-                        &mut writer,
+                        reader,
+                        writer,
                         &next_layer_input.as_slice().unwrap(),
                         layer_encoders,
                     )?;
@@ -577,7 +575,7 @@ where
                     }
                     next_layer_input = Output::zeros(layer.output_dimensions());
                     LinearProtocol::online_server_protocol(
-                        &mut reader,
+                        reader,
                         layer,
                         layer_randomizer,
                         &next_layer_derandomizer,
@@ -609,13 +607,14 @@ where
         timer_end!(start_time);
 
         let sent_message = MsgSend::new(&next_layer_input);
-        bincode::serialize_into(&mut writer, &sent_message).map_err(|e| e.into())
+        let bytes = bincode::serialize(&sent_message)?;
+        writer.write(&bytes).map_err(|e| e.into())
     }
 
     /// Outputs shares for the next round's input.
     pub fn online_client_protocol<R: Read + Send, W: Write + Send>(
-        mut reader: R,
-        mut writer: W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         input: &Input<FixedPoint<P>>,
         architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         state: &ClientState<P>,
@@ -668,8 +667,8 @@ where
                                 .flat_map(|l| l.clone())
                                 .collect::<Vec<_>>();
                             ReluProtocol::<P>::online_client_protocol(
-                                &mut reader,
-                                &mut writer,
+                                reader,
+                                writer,
                                 layer_size,           // num_relus
                                 num_muls,             // number of truncations
                                 &layer_server_labels, // Labels for layer
@@ -686,7 +685,7 @@ where
                     let start_time = timer_start!(|| "Linear layer");
                     // Send server secret share if required by the layer
                     let input = next_layer_input;
-                    LinearProtocol::online_client_protocol(&mut writer, &input, &layer_info)?;
+                    LinearProtocol::online_client_protocol(writer, &input, &layer_info)?;
 
                     // If this is not the last layer, and if the next layer
                     // is also linear, randomize the output correctly.
@@ -703,7 +702,8 @@ where
             }
         }
         timer_end!(start_time);
-        bincode::deserialize_from(reader)
+        let bytes = reader.read()?;
+        bincode::deserialize(&bytes[..])
             .map(|output: MsgRcv<P>| {
                 // Receive server input and reset multiplication count to
                 // avoid an early reduction

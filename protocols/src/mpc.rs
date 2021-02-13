@@ -4,6 +4,7 @@ use crypto_primitives::{
     additive_share::{AdditiveShare, AuthAdditiveShare, AuthShare, Share},
     beavers_mul::{BeaversMul, BlindedInputs, BlindedSharedInputs, PBeaversMul, Triple},
 };
+use io_utils::{IMuxAsync, IMuxSync};
 use itertools::izip;
 use num_traits::identities::Zero;
 use rand::{CryptoRng, RngCore};
@@ -39,8 +40,8 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
     /// Share `inputs` with the other party
     fn private_inputs<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         inputs: &[T],
         rng: &mut RNG,
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
@@ -48,30 +49,30 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
     /// Receive `num_recv` shares from the other party
     fn recv_private_inputs<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
 
     /// Opens `shares` to the other party
-    fn private_open<W: Write>(
+    fn private_open<W: Write + Send>(
         &self,
-        writer: &mut W,
+        writer: &mut IMuxSync<W>,
         shares: &[AuthAdditiveShare<T>],
     ) -> Result<(), MpcError>;
 
     /// Receive `shares` from the other party
-    fn private_recv<R: Read>(
+    fn private_recv<R: Read + Send>(
         &mut self,
-        reader: &mut R,
+        reader: &mut IMuxSync<R>,
         shares: &[AuthAdditiveShare<T>],
     ) -> Result<Vec<T>, MpcError>;
 
     /// Opens `shares` publically and returns result
-    fn public_open<R: Read, W: Write>(
+    fn public_open<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         shares: &[AuthAdditiveShare<T>],
     ) -> Result<Vec<T>, MpcError>;
 
@@ -108,8 +109,8 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
     /// Multiply shares `x` and `y`
     fn mul<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         x: &[AuthAdditiveShare<T>],
         y: &[AuthAdditiveShare<T>],
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError> {
@@ -146,8 +147,8 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
                 for msg_contents in self_blinded_and_shared.chunks(Self::BATCH_SIZE) {
                     let sent_message = MulMsgSend::new(&msg_contents);
                     crate::bytes::serialize(&mut *writer, &sent_message).unwrap();
+                    writer.flush().unwrap();
                 }
-                writer.flush().unwrap();
             });
             // Open blinded shares and perform multiplication
             for (cur_chunk, other_chunk, triple_chunk) in izip!(
@@ -277,8 +278,8 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     /// Share `inputs` with the server
     fn private_inputs<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         inputs: &[Fp64<P>],
         _: &mut RNG,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
@@ -306,8 +307,8 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
                     .collect();
                 let send_message = ConstantMsgSend::new(epsilon_vec.as_slice());
                 crate::bytes::serialize(&mut *writer, &send_message).unwrap();
+                writer.flush().unwrap();
             }
-            writer.flush().unwrap();
         })
         .unwrap();
         Ok(rands)
@@ -316,8 +317,8 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     /// Receive `num_recv` shares from the server
     fn recv_private_inputs<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         let mut shares = Vec::with_capacity(num_recv);
@@ -333,24 +334,24 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     }
 
     /// To open a share to the server, the client sends full AuthAdditiveShare
-    fn private_open<W: Write>(
+    fn private_open<W: Write + Send>(
         &self,
-        writer: &mut W,
+        writer: &mut IMuxSync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<(), MpcError> {
         for shares_chunk in shares.chunks(Self::BATCH_SIZE) {
             let send_message = AuthShareSend::new(shares_chunk);
             crate::bytes::serialize(&mut *writer, &send_message)?;
+            writer.flush()?;
         }
-        writer.flush()?;
         Ok(())
     }
 
     /// To receive a share from the server, the client is given an AdditiveShare
     /// which it adds to its AuthAdditiveShare
-    fn private_recv<R: Read>(
+    fn private_recv<R: Read + Send>(
         &mut self,
-        reader: &mut R,
+        reader: &mut IMuxSync<R>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         let mut recv_shares = Vec::with_capacity(shares.len());
@@ -364,10 +365,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
         Ok(result)
     }
 
-    fn public_open<R: Read, W: Write>(
+    fn public_open<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         self.private_open(writer, shares)?;
@@ -410,8 +411,8 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     /// Share `inputs` with the client
     fn private_inputs<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         inputs: &[Fp64<P>],
         rng: &mut RNG,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
@@ -426,16 +427,16 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
         for client_share in client_shares.chunks(Self::BATCH_SIZE) {
             let send_message = AuthShareSend::new(client_share);
             crate::bytes::serialize(&mut *writer, &send_message)?;
+            writer.flush()?;
         }
-        writer.flush()?;
         Ok(server_shares)
     }
 
     /// Receive `num_recv` shares from the client
     fn recv_private_inputs<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         // Consume necessary random shares
@@ -461,9 +462,9 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     }
 
     /// To open a share to the client, the server sends AdditiveShares
-    fn private_open<W: Write>(
+    fn private_open<W: Write + Send>(
         &self,
-        writer: &mut W,
+        writer: &mut IMuxSync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<(), MpcError> {
         let stripped_shares: Vec<AdditiveShare<Fp64<P>>> =
@@ -471,17 +472,17 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
         for shares in stripped_shares.chunks(Self::BATCH_SIZE) {
             let send_message = ShareSend::new(shares);
             crate::bytes::serialize(&mut *writer, &send_message)?;
+            writer.flush()?;
         }
-        writer.flush()?;
         Ok(())
     }
 
     /// To receive a share from the client, the server is sent an
     /// AuthAdditiveShare. It adds the share to `unchecked` and
     /// eagerly opens value
-    fn private_recv<R: Read>(
+    fn private_recv<R: Read + Send>(
         &mut self,
-        reader: &mut R,
+        reader: &mut IMuxSync<R>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         let mut recv_shares = Vec::with_capacity(shares.len());
@@ -499,10 +500,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
         Ok(result)
     }
 
-    fn public_open<R: Read, W: Write>(
+    fn public_open<R: Read + Send, W: Write + Send>(
         &mut self,
-        reader: &mut R,
-        writer: &mut W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         let result = Self::private_recv(self, reader, shares);

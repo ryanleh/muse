@@ -21,8 +21,8 @@ pub mod inner {
     #[macro_export]
     macro_rules! timer_start {
         ($msg:expr) => {{
-            use $crate::{compute_indent, Colorize, NUM_INDENT};
             use std::{sync::atomic::Ordering, time::Instant};
+            use $crate::{compute_indent, Colorize, NUM_INDENT};
 
             let result = $msg();
             let start_info = "Start:".yellow().bold();
@@ -40,14 +40,18 @@ pub mod inner {
     #[macro_export]
     macro_rules! timer_end {
         ($time:expr) => {{
-            use $crate::{compute_indent, Colorize, NUM_INDENT};
-            use std::sync::atomic::Ordering;
             use std::io::Write;
+            use std::sync::atomic::Ordering;
+            use $crate::{compute_indent, Colorize, NUM_INDENT};
 
             let time = $time.1;
             let final_time = time.elapsed();
             if let Ok(file_name) = std::env::var("BENCH_OUTPUT_FILE") {
-                let mut file = std::fs::OpenOptions::new().append(true).create(true).open(file_name).unwrap();
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(file_name)
+                    .unwrap();
                 writeln!(&mut file, "{}, {:?}", $time.0, final_time).unwrap();
             }
             let final_time = {
@@ -91,11 +95,11 @@ pub mod inner {
     #[macro_export]
     macro_rules! add_to_trace {
         ($title:expr, $msg:expr) => {{
-            use $crate::{
-                compute_indent, compute_indent_whitespace, format, Colorize, 
-                Ordering, ToString, NUM_INDENT,
-            };
             use std::io::Write;
+            use $crate::{
+                compute_indent, compute_indent_whitespace, format, Colorize, Ordering, ToString,
+                NUM_INDENT,
+            };
 
             let start_msg = "StartMsg".yellow().bold();
             let end_msg = "EndMsg".green().bold();
@@ -113,7 +117,11 @@ pub mod inner {
                 final_message += &format!("{}{}\n", msg_indent, line,);
             }
             if let Ok(file_name) = std::env::var("BENCH_OUTPUT_FILE") {
-                let mut file = std::fs::OpenOptions::new().append(true).create(true).open(file_name).unwrap();
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(file_name)
+                    .unwrap();
                 writeln!(&mut file, "{}, {:?}", title, final_message).unwrap();
             }
 
@@ -144,7 +152,6 @@ pub mod inner {
         indent
     }
 
-
     pub fn compute_indent_whitespace(indent_amount: usize) -> String {
         let mut indent = String::new();
         for _ in 0..indent_amount {
@@ -152,7 +159,6 @@ pub mod inner {
         }
         indent
     }
-
 }
 
 #[cfg(not(feature = "timer"))]

@@ -15,6 +15,7 @@ use crypto_primitives::{
     },
     AuthShare, Share,
 };
+use io_utils::{IMuxAsync, IMuxSync};
 use itertools::interleave;
 use protocols_sys::{ClientFHE, ServerFHE};
 use rand::{CryptoRng, RngCore};
@@ -99,8 +100,8 @@ where
     }
 
     pub fn offline_server_protocol<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        mut reader: R,
-        mut writer: W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         number_of_relus: usize,
         sfhe: &ServerFHE,
         layer_sizes: &[usize],
@@ -215,7 +216,7 @@ where
             .zip(randomizer_labels.chunks(randomizer_label_per_relu * 8192))
         {
             let sent_message = ServerGcMsgSend::new(&msg_contents);
-            crate::bytes::serialize(&mut writer, &sent_message)?;
+            crate::bytes::serialize(writer, &sent_message)?;
             writer.flush()?;
         }
         timer_end!(send_gc_time);
@@ -223,8 +224,8 @@ where
         let cds_time = timer_start!(|| "CDS Protocol");
         if number_of_relus > 0 {
             cds::CDSProtocol::<P>::server_cds(
-                &mut reader,
-                &mut writer,
+                reader,
+                writer,
                 sfhe,
                 layer_sizes,
                 output_mac_keys,
@@ -239,7 +240,12 @@ where
 
         // Send carry labels to client
         let send_time = timer_start!(|| "Sending carry labels");
-        let mut channel = Channel::new(reader, &mut writer);
+
+        let mut readers = reader.get_mut_ref();
+        let mut writers = writer.get_mut_ref();
+
+        // Receive back labels
+        let mut channel = Channel::new(&mut readers[0], &mut writers[0]);
         carry_labels
             .iter()
             .for_each(|l| channel.write_block(l).unwrap());
@@ -254,8 +260,8 @@ where
     }
 
     pub fn offline_client_protocol<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        mut reader: R,
-        mut writer: W,
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         number_of_relus: usize,
         cfhe: &ClientFHE,
         layer_sizes: &[usize],
@@ -272,7 +278,7 @@ where
 
         let num_chunks = (number_of_relus as f64 / 8192.0).ceil() as usize;
         for i in 0..num_chunks {
-            let in_msg: ClientGcMsgRcv = crate::bytes::deserialize(&mut reader)?;
+            let in_msg: ClientGcMsgRcv = crate::bytes::deserialize(reader)?;
             let (gc_chunks, r_wire_chunks) = in_msg.msg();
             if i < (num_chunks - 1) {
                 assert_eq!(gc_chunks.len(), 8192);
@@ -287,8 +293,8 @@ where
         let cds_time = timer_start!(|| "CDS Protocol");
         let labels = if number_of_relus > 0 {
             cds::CDSProtocol::<P>::client_cds(
-                &mut reader,
-                &mut writer,
+                reader,
+                writer,
                 cfhe,
                 layer_sizes,
                 output_mac_shares,
@@ -304,7 +310,12 @@ where
 
         // Receive carry labels
         let recv_time = timer_start!(|| "Receiving carry labels");
-        let mut channel = Channel::new(reader, writer);
+
+        let mut readers = reader.get_mut_ref();
+        let mut writers = writer.get_mut_ref();
+
+        // Receive back labels
+        let mut channel = Channel::new(&mut readers[0], &mut writers[0]);
         let carry_labels: Vec<Wire> = (0..2 * number_of_relus)
             .map(|_| Wire::from_block(channel.read_block().unwrap(), 2))
             .collect();
@@ -326,9 +337,9 @@ where
         })
     }
 
-    pub fn online_server_protocol<'a, R: Read, W: Write>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn online_server_protocol<'a, R: Read + Send, W: Write + Send>(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         shares: &[AdditiveShare<P>],
         encoders: &[Encoder],
     ) -> Result<Vec<AdditiveShare<P>>, MpcError> {
@@ -363,9 +374,9 @@ where
     }
 
     /// Outputs shares for the next round's input.
-    pub fn online_client_protocol<R: Read, W: Write>(
-        reader: &mut R,
-        writer: &mut W,
+    pub fn online_client_protocol<R: Read + Send, W: Write + Send>(
+        reader: &mut IMuxSync<R>,
+        writer: &mut IMuxSync<W>,
         num_relus: usize,
         num_trunc: u8,
         server_input_wires: &[Wire],

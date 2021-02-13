@@ -1,4 +1,5 @@
 use algebra::fixed_point::FixedPoint;
+use io_utils::{IMuxAsync, IMuxSync};
 use protocols_sys::{ClientFHE, KeyShare, ServerFHE};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -29,7 +30,9 @@ pub struct KeygenType;
 pub type ServerKeyRcv = InMessage<Vec<std::os::raw::c_char>, KeygenType>;
 pub type ClientKeySend<'a> = OutMessage<'a, Vec<std::os::raw::c_char>, KeygenType>;
 
-pub fn client_keygen<W: Write>(writer: &mut W) -> Result<ClientFHE, bincode::Error> {
+pub fn client_keygen<W: Write + Send>(
+    writer: &mut IMuxSync<W>,
+) -> Result<ClientFHE, bincode::Error> {
     let mut key_share = KeyShare::new();
     let gen_time = timer_start!(|| "Generating keys");
     let (cfhe, keys_vec) = key_share.generate();
@@ -42,7 +45,9 @@ pub fn client_keygen<W: Write>(writer: &mut W) -> Result<ClientFHE, bincode::Err
     Ok(cfhe)
 }
 
-pub fn server_keygen<R: Read>(reader: &mut R) -> Result<ServerFHE, bincode::Error> {
+pub fn server_keygen<R: Read + Send>(
+    reader: &mut IMuxSync<R>,
+) -> Result<ServerFHE, bincode::Error> {
     let recv_time = timer_start!(|| "Receiving keys");
     let keys: ServerKeyRcv = crate::bytes::deserialize(reader)?;
     timer_end!(recv_time);
@@ -50,8 +55,8 @@ pub fn server_keygen<R: Read>(reader: &mut R) -> Result<ServerFHE, bincode::Erro
     Ok(key_share.receive(keys.msg()))
 }
 
-pub async fn async_client_keygen<W: async_std::io::Write + Unpin>(
-    writer: &mut W,
+pub async fn async_client_keygen<W: futures::io::AsyncWrite + Unpin>(
+    writer: &mut IMuxAsync<W>,
 ) -> Result<ClientFHE, bincode::Error> {
     let mut key_share = KeyShare::new();
     let gen_time = timer_start!(|| "Generating keys");
@@ -65,8 +70,8 @@ pub async fn async_client_keygen<W: async_std::io::Write + Unpin>(
     Ok(cfhe)
 }
 
-pub async fn async_server_keygen<R: async_std::io::Read + Unpin>(
-    reader: &mut R,
+pub async fn async_server_keygen<R: futures::io::AsyncRead + Unpin>(
+    reader: &mut IMuxAsync<R>,
 ) -> Result<ServerFHE, bincode::Error> {
     let recv_time = timer_start!(|| "Receiving keys");
     let keys: ServerKeyRcv = crate::bytes::async_deserialize(reader).await?;
