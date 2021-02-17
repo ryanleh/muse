@@ -47,5 +47,5 @@ fn main() {
     let port = args.value_of("port").unwrap_or("8000");
     let server_addr = format!("0.0.0.0:{}", port);
 
-    experiments::latency::server::async_triples_gen(&server_addr, num_triples, &mut rng);
+    experiments::latency::server::triples_gen(&server_addr, num_triples, &mut rng);
 }

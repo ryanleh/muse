@@ -5,7 +5,7 @@ use algebra::{
     FpParameters, PrimeField, UniformRandom,
 };
 use crypto_primitives::additive_share::{AuthShare, Share};
-use io_utils::{IMuxAsync, IMuxSync};
+use io_utils::IMuxAsync;
 use neural_network::{
     layers::*,
     tensors::{Input, Output},
@@ -14,10 +14,11 @@ use neural_network::{
 use protocols_sys::{SealClientACG, SealServerACG, *};
 use rand::{CryptoRng, RngCore};
 use std::{
-    io::{Read, Write},
     marker::PhantomData,
     os::raw::c_char,
 };
+    
+use async_std::io::{Read, Write};
 
 pub struct LinearProtocol<P: FixedPointParameters> {
     _share: PhantomData<P>,
@@ -46,12 +47,12 @@ where
     /// and authenticated shares of shares of `Lr` --> [[r]]_2, <Lr>_2,
     /// [[<Lr>_2]]_2
     pub fn offline_server_acg_protocol<
-        R: Read + Send,
-        W: Write + Send,
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
         RNG: RngCore + CryptoRng,
     >(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         input_dims: (usize, usize, usize, usize),
         output_dims: (usize, usize, usize, usize),
         server_acg: &mut SealServerACG,
@@ -138,12 +139,12 @@ where
     /// authenticated shares of `r`, shares of `Lr`, and authenticated shares of
     /// shares of `Lr` --> [[r]]_1, <Lr>_1, [[<Lr>_1]]_1
     pub fn offline_client_acg_protocol<
-        R: Read + Send,
-        W: Write + Send,
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
         RNG: RngCore + CryptoRng,
     >(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         input_dims: (usize, usize, usize, usize),
         output_dims: (usize, usize, usize, usize),
         client_acg: &mut SealClientACG,
@@ -200,9 +201,9 @@ where
 
     /// Client sends a value to the server and receives back a share of it's
     /// MAC'd value
-    pub fn offline_client_auth_share<R: Read + Send, W: Write + Send>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn offline_client_auth_share<R: Read + Send + Unpin, W: Write + Send + Unpin>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         input: Input<P::Field>,
         cfhe: &ClientFHE,
     ) -> Result<Input<AuthAdditiveShare<P::Field>>, bincode::Error> {
@@ -233,9 +234,9 @@ where
     }
 
     /// Server receives an encrypted vector from the client and shares its MAC
-    pub fn offline_server_auth_share<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn offline_server_auth_share<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         input_dims: (usize, usize, usize, usize),
         sfhe: &ServerFHE,
         rng: &mut RNG,
@@ -274,8 +275,8 @@ where
         ))
     }
 
-    pub fn online_client_protocol<W: Write + Send>(
-        writer: &mut IMuxSync<W>,
+    pub fn online_client_protocol<W: Write + Send + Unpin>(
+        writer: &mut IMuxAsync<W>,
         x_s: &Input<AdditiveShare<P>>,
         layer: &LinearLayerInfo<AdditiveShare<P>, FixedPoint<P>>,
     ) -> Result<(), bincode::Error> {
@@ -284,7 +285,6 @@ where
             LinearLayerInfo::Conv2d { .. } | LinearLayerInfo::FullyConnected => {
                 let sent_message = MsgSend::new(x_s);
                 crate::bytes::serialize(&mut *writer, &sent_message)?;
-                writer.flush()?;
             }
             _ => {}
         }
@@ -292,8 +292,8 @@ where
         Ok(())
     }
 
-    pub fn online_server_protocol<R: Read + Send>(
-        reader: &mut IMuxSync<R>,
+    pub fn online_server_protocol<R: Read + Send + Unpin>(
+        reader: &mut IMuxAsync<R>,
         layer: &LinearLayer<AdditiveShare<P>, FixedPoint<P>>,
         output_rerandomizer: &Output<P::Field>,
         input_derandomizer: &Input<P::Field>,

@@ -4,7 +4,7 @@ if("${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}" LESS 2.5)
    message(FATAL_ERROR "CMake >= 2.6.0 required")
 endif()
 cmake_policy(PUSH)
-cmake_policy(VERSION 2.6)
+cmake_policy(VERSION 2.6...3.17)
 #----------------------------------------------------------------
 # Generated CMake target import file.
 #----------------------------------------------------------------
@@ -46,7 +46,7 @@ add_library(SEAL::seal STATIC IMPORTED)
 
 set_target_properties(SEAL::seal PROPERTIES
   INTERFACE_COMPILE_FEATURES "cxx_std_17"
-  INTERFACE_INCLUDE_DIRECTORIES "/home/ubuntu/muse/protocols-sys/c++/SEAL/native/src"
+  INTERFACE_INCLUDE_DIRECTORIES "/home/ryan/research/muse/protocols-sys/c++/SEAL/native/src"
   INTERFACE_LINK_LIBRARIES "Threads::Threads"
 )
 
@@ -54,7 +54,7 @@ set_target_properties(SEAL::seal PROPERTIES
 set_property(TARGET SEAL::seal APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
 set_target_properties(SEAL::seal PROPERTIES
   IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE "C;CXX"
-  IMPORTED_LOCATION_RELEASE "/home/ubuntu/muse/protocols-sys/c++/SEAL/native/lib/libseal-3.4.a"
+  IMPORTED_LOCATION_RELEASE "/home/ryan/research/muse/protocols-sys/c++/SEAL/native/lib/libseal-3.4.a"
   )
 
 # This file does not depend on other imported targets which have

@@ -23,6 +23,7 @@ use protocols::{
     mpc::{ServerMPC, MPC},
     mpc_offline::{OfflineMPC, ServerOfflineMPC},
     neural_network::NNProtocol,
+    client_keygen,
     server_keygen,
 };
 use protocols_sys::{server_acg, SealClientACG, SealServerACG, ServerACG, ServerFHE};
@@ -31,50 +32,35 @@ use rayon::prelude::*;
 use scuttlebutt::Block;
 use std::{
     collections::BTreeMap,
-    io::{BufReader, BufWriter, Write},
-    net::{TcpListener, TcpStream},
 };
 
-pub fn server_connect_sync(
-    addr: &str,
-) -> (
-    IMuxSync<CountingIO<BufReader<TcpStream>>>,
-    IMuxSync<CountingIO<BufWriter<TcpStream>>>,
-) {
-    // TODO: Maybe change to rayon_num_threads
-    let listener = TcpListener::bind("0.0.0.0:8000").unwrap();
-    let mut incoming = listener.incoming();
-    let mut readers = Vec::with_capacity(16);
-    let mut writers = Vec::with_capacity(16);
-    for _ in 0..16 {
-        let stream = incoming.next().unwrap().unwrap();
-        readers.push(CountingIO::new(BufReader::new(stream.try_clone().unwrap())));
-        writers.push(CountingIO::new(BufWriter::new(stream)));
-    }
-    (IMuxSync::new(readers), IMuxSync::new(writers))
-}
+use async_std::{
+    io::{BufReader, BufWriter, Write},
+    net::{TcpListener, TcpStream},
+    task
+};
 
-pub async fn server_connect_async(
+pub fn server_connect(
     addr: &str,
 ) -> (
-    IMuxAsync<CountingIO<async_std::io::BufReader<async_std::net::TcpStream>>>,
-    IMuxAsync<CountingIO<async_std::io::BufWriter<async_std::net::TcpStream>>>,
+    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
+    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
 ) {
-    // TODO: Maybe change to rayon_num_threads
-    let listener = async_std::net::TcpListener::bind("0.0.0.0:8000")
-        .await
-        .unwrap();
-    let mut incoming = listener.incoming();
-    let mut readers = Vec::with_capacity(16);
-    let mut writers = Vec::with_capacity(16);
-    for _ in 0..16 {
-        let stream = incoming.next().await.unwrap().unwrap();
-        readers.push(CountingIO::new(async_std::io::BufReader::new(
-            stream.clone(),
-        )));
-        writers.push(CountingIO::new(async_std::io::BufWriter::new(stream)));
-    }
-    (IMuxAsync::new(readers), IMuxAsync::new(writers))
+    task::block_on(async{
+        // TODO: Maybe change to rayon_num_threads
+        let listener = TcpListener::bind("0.0.0.0:8000")
+            .await
+            .unwrap();
+        let mut incoming = listener.incoming();
+        let mut readers = Vec::with_capacity(16);
+        let mut writers = Vec::with_capacity(16);
+        for _ in 0..16 {
+            let stream = incoming.next().await.unwrap().unwrap();
+            readers.push(CountingIO::new(BufReader::new(stream.clone())));
+            writers.push(CountingIO::new(BufWriter::new(stream)));
+        }
+        (IMuxAsync::new(readers), IMuxAsync::new(writers))
+    })
 }
 
 pub fn nn_server<R: RngCore + CryptoRng>(
@@ -82,16 +68,17 @@ pub fn nn_server<R: RngCore + CryptoRng>(
     nn: NeuralNetwork<TenBitAS, TenBitExpFP>,
     rng: &mut R,
 ) {
-    let (server_offline_state, offline_bytes) = {
-        let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (server_offline_state, offline_read, offline_write) = {
+        let (mut reader, mut writer) = server_connect(server_addr);
         (
             NNProtocol::offline_server_protocol(&mut reader, &mut writer, &nn, rng).unwrap(),
+            reader.count(),
             writer.count(),
         )
     };
 
-    let (_, online_bytes) = {
-        let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (_, online_read, online_write) = {
+        let (mut reader, mut writer) = server_connect(server_addr);
         (
             NNProtocol::online_server_protocol(
                 &mut reader,
@@ -100,29 +87,26 @@ pub fn nn_server<R: RngCore + CryptoRng>(
                 &server_offline_state,
             )
             .unwrap(),
+            reader.count(),
             writer.count(),
         )
     };
-    add_to_trace!(|| "Offline Phase Bytes written: ", || format!(
-        "{}",
-        offline_bytes
-    ));
-    add_to_trace!(|| "Online Phase Bytes written: ", || format!(
-        "{}",
-        online_bytes
-    ));
+    add_to_trace!(|| "Offline Communication", || format!("Read {} bytes\nWrote {} bytes", offline_read, offline_write));
+    add_to_trace!(|| "Online Communication", || format!("Read {} bytes\nWrote {} bytes", online_read, online_write));
 }
 
+// TODO: Pull out this functionality in `neural_network.rs` so this is clean
 pub fn acg<R: RngCore + CryptoRng>(
     server_addr: &str,
     nn: NeuralNetwork<TenBitAS, TenBitExpFP>,
     rng: &mut R,
 ) {
-    let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (mut reader, mut writer) = server_connect(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
     let mac_key = F::uniform(rng);
+    reader.reset();
 
     let mut linear_shares: BTreeMap<
         usize,
@@ -213,15 +197,15 @@ pub fn acg<R: RngCore + CryptoRng>(
         }
     }
     timer_end!(linear_time);
-    println!("Bytes written: {}", writer.count());
-    add_to_trace!(|| "Bytes written: ", || format!("{}", writer.count()));
+    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
 }
 
 pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (mut reader, mut writer) = server_connect(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
+    reader.count();
 
     // Generate dummy labels/layer for CDS
     let activations: usize = layers.iter().map(|e| *e).sum();
@@ -323,56 +307,35 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
         .zip(randomizer_labels.chunks(randomizer_label_per_relu * 8192))
     {
         let sent_message = ServerGcMsgSend::new(&msg_contents);
-        let bytes: Vec<u8> = bincode::serialize(&sent_message).unwrap();
-        writer.write(&bytes).unwrap();
-        writer.flush().unwrap();
+        protocols::bytes::serialize(&mut writer, &sent_message).unwrap();
     }
     timer_end!(send_gc_time);
     timer_end!(garble_time);
-    add_to_trace!(|| "Bytes written: ", || format!("{}", writer.count()));
+    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
 }
 
 pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &mut R) {
-    let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (mut reader, mut writer) = server_connect(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
     let mac_key = F::uniform(rng);
+    reader.reset();
 
     // Generate triples
     let server_gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
     let triples = timer_start!(|| "Generating triples");
     server_gen.triples_gen(&mut reader, &mut writer, rng, num);
     timer_end!(triples);
-}
-
-use async_std::{prelude::*, task};
-use protocols::async_server_keygen;
-
-pub fn async_triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &mut R) {
-    let (mut reader, mut writer) =
-        task::block_on(async { server_connect_async(server_addr).await });
-
-    let (sfhe, mac_key) = task::block_on(async {
-        (
-            async_server_keygen(&mut reader).await.unwrap(),
-            F::uniform(rng),
-        )
-    });
-
-    // Generate triples
-    let server_gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
-    let triples = timer_start!(|| "Generating triples");
-    let server_triples = server_gen.async_triples_gen(&mut reader, &mut writer, rng, num);
-    timer_end!(triples);
-    add_to_trace!(|| "Bytes written: ", || format!("{}", writer.count()));
+    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (mut reader, mut writer) = server_connect(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
+    reader.reset();
 
     // Generate dummy labels/layer for CDS
     let activations: usize = layers.iter().map(|e| *e).sum();
@@ -399,18 +362,17 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
         rng,
     )
     .unwrap();
-    add_to_trace!(|| "Bytes written: ", || format!("{}", writer.count()));
+    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
 }
 
 pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    use protocols::client_keygen;
-    use protocols_sys::SealCT;
-
-    let (mut reader, mut writer) = server_connect_sync(server_addr);
+    let (mut reader, mut writer) = server_connect(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
     let mut cfhe = client_keygen(&mut writer).unwrap();
+    reader.reset();
+    writer.reset();
 
     // Generate dummy labels/layer for CDS
     let activations: usize = layers.iter().map(|e| *e).sum();
@@ -472,197 +434,198 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);
+    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
 }
 
-pub fn async_input_auth<R: RngCore + CryptoRng>(
-    server_addr: &str,
-    server_addr_2: &str,
-    layers: &[usize],
-    rng: &mut R,
-) {
-    use protocols::async_client_keygen;
-    use protocols_sys::SealCT;
-
-    // TODO: Need a sync stream for now because async is not implemented for online MPC
-    let (mut sync_reader, mut sync_writer) = server_connect_sync(server_addr);
-
-    let (mut reader, mut writer) =
-        task::block_on(async { server_connect_async(server_addr).await });
-
-    let (sfhe, mut cfhe) = task::block_on(async {
-        (
-            async_server_keygen(&mut reader).await.unwrap(),
-            async_client_keygen(&mut writer).await.unwrap(),
-        )
-    });
-
-    writer.reset();
-
-    // Generate dummy labels/layer for CDS
-    let activations: usize = layers.iter().map(|e| *e).sum();
-    let modulus_bits = <F as PrimeField>::size_in_bits();
-    let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
-
-    let out_mac_keys = vec![F::zero(); layers.len()];
-    let out_mac_shares = vec![F::zero(); activations];
-    let inp_mac_keys = vec![F::zero(); layers.len()];
-    let inp_mac_shares = vec![F::zero(); activations];
-    let zero_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
-    let one_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
-
-    let num_rands = 2 * (activations + activations * modulus_bits);
-
-    // Generate rands
-    let mac_key = F::uniform(rng);
-    let gen = ServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
-
-    let input_time = timer_start!(|| "Input Auth");
-    let rands = gen.async_rands_gen(&mut reader, &mut writer, rng, num_rands);
-    let mut mpc = ServerMPC::new(rands, Vec::new(), mac_key);
-
-    // Share inputs
-    let share_time = timer_start!(|| "Server sharing inputs");
-    let out_mac_keys = mpc
-        .private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            out_mac_keys.as_slice(),
-            rng,
-        )
-        .unwrap();
-    let inp_mac_keys = mpc
-        .private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            inp_mac_keys.as_slice(),
-            rng,
-        )
-        .unwrap();
-    let out_mac_shares = mpc
-        .private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            out_mac_shares.as_slice(),
-            rng,
-        )
-        .unwrap();
-    let inp_mac_shares = mpc
-        .private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            inp_mac_shares.as_slice(),
-            rng,
-        )
-        .unwrap();
-    let zero_labels = mpc
-        .private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            zero_labels.as_slice(),
-            rng,
-        )
-        .unwrap();
-    let one_labels = mpc
-        .private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            one_labels.as_slice(),
-            rng,
-        )
-        .unwrap();
-    timer_end!(share_time);
-
-    // Receive client shares
-    let recv_time = timer_start!(|| "Server receiving inputs");
-    let out_bits = mpc
-        .recv_private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            activations * modulus_bits,
-        )
-        .unwrap();
-    let inp_bits = mpc
-        .recv_private_inputs(
-            &mut sync_reader,
-            &mut sync_writer,
-            activations * modulus_bits,
-        )
-        .unwrap();
-    let c_out_mac_shares = mpc
-        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
-        .unwrap();
-    let c_inp_mac_shares = mpc
-        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
-        .unwrap();
-    timer_end!(recv_time);
-    timer_end!(input_time);
-    add_to_trace!(|| "Bytes written: ", || format!(
-        "{}",
-        writer.count() + sync_writer.count()
-    ));
-}
-
-pub fn input_auth_ltme<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    use protocols::client_keygen;
-    use protocols_sys::SealCT;
-
-    let (mut reader, mut writer) = server_connect_sync(server_addr);
-
-    // Keygen
-    let sfhe = server_keygen(&mut reader).unwrap();
-    let mut cfhe = client_keygen(&mut writer).unwrap();
-
-    // Generate and send MAC key to client
-    let mac_key = F::uniform(rng);
-    let mut mac_ct_seal = SealCT::new();
-    let mac_ct = mac_ct_seal.encrypt_vec(&cfhe, vec![mac_key.into_repr().0, 8192]);
-
-    let gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
-    gen.send_mac(&mut writer, mac_ct);
-    let mut mpc = ServerMPC::new(Vec::new(), Vec::new(), mac_key);
-
-    // Generate dummy labels/layer for CDS
-    let activations: usize = layers.iter().map(|e| *e).sum();
-    let modulus_bits = <F as PrimeField>::size_in_bits();
-    let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
-
-    let out_mac_keys = vec![F::zero(); layers.len()];
-    let out_mac_shares = vec![F::zero(); activations];
-    let inp_mac_keys = vec![F::zero(); layers.len()];
-    let inp_mac_shares = vec![F::zero(); activations];
-    let zero_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
-    let one_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
-
-    let input_time = timer_start!(|| "Input Auth");
-
-    // Share inputs
-    let share_time = timer_start!(|| "Server sharing inputs");
-    let out_mac_keys = mpc
-        .private_inputs(&mut reader, &mut writer, out_mac_keys.as_slice(), rng)
-        .unwrap();
-    let inp_mac_keys = mpc
-        .private_inputs(&mut reader, &mut writer, inp_mac_keys.as_slice(), rng)
-        .unwrap();
-    let out_mac_shares = mpc
-        .private_inputs(&mut reader, &mut writer, out_mac_shares.as_slice(), rng)
-        .unwrap();
-    let inp_mac_shares = mpc
-        .private_inputs(&mut reader, &mut writer, inp_mac_shares.as_slice(), rng)
-        .unwrap();
-    let zero_labels = mpc
-        .private_inputs(&mut reader, &mut writer, zero_labels.as_slice(), rng)
-        .unwrap();
-    let one_labels = mpc
-        .private_inputs(&mut reader, &mut writer, one_labels.as_slice(), rng)
-        .unwrap();
-    timer_end!(share_time);
-
-    // Receive client shares
-    let recv_time = timer_start!(|| "Server receiving inputs");
-    let out_bits = gen.recv_optimized_input(&cfhe, &mut reader, activations * modulus_bits);
-    let inp_bits = gen.recv_optimized_input(&cfhe, &mut reader, activations * modulus_bits);
-    let c_out_mac_shares = gen.recv_optimized_input(&cfhe, &mut reader, activations);
-    let c_inp_mac_shares = gen.recv_optimized_input(&cfhe, &mut reader, activations);
-    timer_end!(recv_time);
-    timer_end!(input_time);
-}
+//pub fn async_input_auth<R: RngCore + CryptoRng>(
+//    server_addr: &str,
+//    server_addr_2: &str,
+//    layers: &[usize],
+//    rng: &mut R,
+//) {
+//    use protocols::async_client_keygen;
+//    use protocols_sys::SealCT;
+//
+//    // TODO: Need a sync stream for now because async is not implemented for online MPC
+//    let (mut sync_reader, mut sync_writer) = server_connect_sync(server_addr);
+//
+//    let (mut reader, mut writer) =
+//        task::block_on(async { server_connect_async(server_addr).await });
+//
+//    let (sfhe, mut cfhe) = task::block_on(async {
+//        (
+//            async_server_keygen(&mut reader).await.unwrap(),
+//            async_client_keygen(&mut writer).await.unwrap(),
+//        )
+//    });
+//
+//    writer.reset();
+//
+//    // Generate dummy labels/layer for CDS
+//    let activations: usize = layers.iter().map(|e| *e).sum();
+//    let modulus_bits = <F as PrimeField>::size_in_bits();
+//    let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
+//
+//    let out_mac_keys = vec![F::zero(); layers.len()];
+//    let out_mac_shares = vec![F::zero(); activations];
+//    let inp_mac_keys = vec![F::zero(); layers.len()];
+//    let inp_mac_shares = vec![F::zero(); activations];
+//    let zero_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
+//    let one_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
+//
+//    let num_rands = 2 * (activations + activations * modulus_bits);
+//
+//    // Generate rands
+//    let mac_key = F::uniform(rng);
+//    let gen = ServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
+//
+//    let input_time = timer_start!(|| "Input Auth");
+//    let rands = gen.async_rands_gen(&mut reader, &mut writer, rng, num_rands);
+//    let mut mpc = ServerMPC::new(rands, Vec::new(), mac_key);
+//
+//    // Share inputs
+//    let share_time = timer_start!(|| "Server sharing inputs");
+//    let out_mac_keys = mpc
+//        .private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            out_mac_keys.as_slice(),
+//            rng,
+//        )
+//        .unwrap();
+//    let inp_mac_keys = mpc
+//        .private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            inp_mac_keys.as_slice(),
+//            rng,
+//        )
+//        .unwrap();
+//    let out_mac_shares = mpc
+//        .private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            out_mac_shares.as_slice(),
+//            rng,
+//        )
+//        .unwrap();
+//    let inp_mac_shares = mpc
+//        .private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            inp_mac_shares.as_slice(),
+//            rng,
+//        )
+//        .unwrap();
+//    let zero_labels = mpc
+//        .private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            zero_labels.as_slice(),
+//            rng,
+//        )
+//        .unwrap();
+//    let one_labels = mpc
+//        .private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            one_labels.as_slice(),
+//            rng,
+//        )
+//        .unwrap();
+//    timer_end!(share_time);
+//
+//    // Receive client shares
+//    let recv_time = timer_start!(|| "Server receiving inputs");
+//    let out_bits = mpc
+//        .recv_private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            activations * modulus_bits,
+//        )
+//        .unwrap();
+//    let inp_bits = mpc
+//        .recv_private_inputs(
+//            &mut sync_reader,
+//            &mut sync_writer,
+//            activations * modulus_bits,
+//        )
+//        .unwrap();
+//    let c_out_mac_shares = mpc
+//        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
+//        .unwrap();
+//    let c_inp_mac_shares = mpc
+//        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
+//        .unwrap();
+//    timer_end!(recv_time);
+//    timer_end!(input_time);
+//    add_to_trace!(|| "Bytes written: ", || format!(
+//        "{}",
+//        writer.count() + sync_writer.count()
+//    ));
+//}
+//
+//pub fn input_auth_ltme<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
+//    use protocols::client_keygen;
+//    use protocols_sys::SealCT;
+//
+//    let (mut reader, mut writer) = server_connect_sync(server_addr);
+//
+//    // Keygen
+//    let sfhe = server_keygen(&mut reader).unwrap();
+//    let mut cfhe = client_keygen(&mut writer).unwrap();
+//
+//    // Generate and send MAC key to client
+//    let mac_key = F::uniform(rng);
+//    let mut mac_ct_seal = SealCT::new();
+//    let mac_ct = mac_ct_seal.encrypt_vec(&cfhe, vec![mac_key.into_repr().0, 8192]);
+//
+//    let gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
+//    gen.send_mac(&mut writer, mac_ct);
+//    let mut mpc = ServerMPC::new(Vec::new(), Vec::new(), mac_key);
+//
+//    // Generate dummy labels/layer for CDS
+//    let activations: usize = layers.iter().map(|e| *e).sum();
+//    let modulus_bits = <F as PrimeField>::size_in_bits();
+//    let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
+//
+//    let out_mac_keys = vec![F::zero(); layers.len()];
+//    let out_mac_shares = vec![F::zero(); activations];
+//    let inp_mac_keys = vec![F::zero(); layers.len()];
+//    let inp_mac_shares = vec![F::zero(); activations];
+//    let zero_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
+//    let one_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
+//
+//    let input_time = timer_start!(|| "Input Auth");
+//
+//    // Share inputs
+//    let share_time = timer_start!(|| "Server sharing inputs");
+//    let out_mac_keys = mpc
+//        .private_inputs(&mut reader, &mut writer, out_mac_keys.as_slice(), rng)
+//        .unwrap();
+//    let inp_mac_keys = mpc
+//        .private_inputs(&mut reader, &mut writer, inp_mac_keys.as_slice(), rng)
+//        .unwrap();
+//    let out_mac_shares = mpc
+//        .private_inputs(&mut reader, &mut writer, out_mac_shares.as_slice(), rng)
+//        .unwrap();
+//    let inp_mac_shares = mpc
+//        .private_inputs(&mut reader, &mut writer, inp_mac_shares.as_slice(), rng)
+//        .unwrap();
+//    let zero_labels = mpc
+//        .private_inputs(&mut reader, &mut writer, zero_labels.as_slice(), rng)
+//        .unwrap();
+//    let one_labels = mpc
+//        .private_inputs(&mut reader, &mut writer, one_labels.as_slice(), rng)
+//        .unwrap();
+//    timer_end!(share_time);
+//
+//    // Receive client shares
+//    let recv_time = timer_start!(|| "Server receiving inputs");
+//    let out_bits = gen.recv_optimized_input(&cfhe, &mut reader, activations * modulus_bits);
+//    let inp_bits = gen.recv_optimized_input(&cfhe, &mut reader, activations * modulus_bits);
+//    let c_out_mac_shares = gen.recv_optimized_input(&cfhe, &mut reader, activations);
+//    let c_inp_mac_shares = gen.recv_optimized_input(&cfhe, &mut reader, activations);
+//    timer_end!(recv_time);
+//    timer_end!(input_time);
+//}

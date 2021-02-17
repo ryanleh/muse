@@ -1,13 +1,14 @@
-use crate::{error::MpcError, AdditiveShare, AuthAdditiveShare, InMessage, OutMessage};
+use crate::{bytes, error::MpcError, AdditiveShare, AuthAdditiveShare, InMessage, OutMessage};
 use bench_utils::{timer_end, timer_start};
 use neural_network::{
     layers::{Layer, LayerInfo, NonLinearLayer, NonLinearLayerInfo},
     NeuralArchitecture, NeuralNetwork,
 };
+
+use async_std::io::{Read, Write};
 use rand::{CryptoRng, RngCore};
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
     marker::PhantomData,
 };
 
@@ -28,7 +29,7 @@ use crypto_primitives::{
 };
 
 use crate::{gc::ReluProtocol, linear_layer::LinearProtocol};
-use io_utils::{IMuxAsync, IMuxSync};
+use io_utils::IMuxAsync;
 use protocols_sys::{
     client_acg, server_acg, ClientACG, ClientFHE, SealClientACG, SealServerACG, ServerACG,
     ServerFHE,
@@ -50,6 +51,8 @@ where
     pub relu_output_randomizers: Vec<P::Field>,
 }
 
+// TODO: Explain that everythign is sync but can use async
+// TODO: Add Online phase MACs
 pub struct ClientState<P: FixedPointParameters>
 where
     P::Field: AuthShare,
@@ -121,9 +124,9 @@ where
     >,
     P::Field: AuthShare,
 {
-    pub fn offline_server_protocol<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn offline_server_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
     ) -> Result<ServerState<P>, MpcError> {
@@ -314,9 +317,9 @@ where
         })
     }
 
-    pub fn offline_client_protocol<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn offline_client_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
     ) -> Result<ClientState<P>, MpcError> {
@@ -511,9 +514,9 @@ where
         })
     }
 
-    pub fn online_server_protocol<R: Read + Send, W: Write + Send>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn online_server_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         state: &ServerState<P>,
     ) -> Result<(), MpcError> {
@@ -604,17 +607,19 @@ where
                 }
             }
         }
-        timer_end!(start_time);
 
+        // Open the final share to the client
         let sent_message = MsgSend::new(&next_layer_input);
-        let bytes = bincode::serialize(&sent_message)?;
-        writer.write(&bytes).map_err(|e| e.into())
+        bytes::serialize(writer, &sent_message)?;
+
+        timer_end!(start_time);
+        Ok(())
     }
 
     /// Outputs shares for the next round's input.
-    pub fn online_client_protocol<R: Read + Send, W: Write + Send>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn online_client_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         input: &Input<FixedPoint<P>>,
         architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         state: &ClientState<P>,
@@ -701,9 +706,7 @@ where
                 }
             }
         }
-        timer_end!(start_time);
-        let bytes = reader.read()?;
-        bincode::deserialize(&bytes[..])
+        let result = bytes::deserialize(reader)
             .map(|output: MsgRcv<P>| {
                 // Receive server input and reset multiplication count to
                 // avoid an early reduction
@@ -718,7 +721,8 @@ where
                     *e = FixedPoint::with_num_muls(e.inner, num_muls).signed_reduce();
                 });
                 result
-            })
-            .map_err(|e| e.into())
+            })?;
+        timer_end!(start_time);
+        Ok(result)
     }
 }

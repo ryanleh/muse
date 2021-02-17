@@ -34,7 +34,6 @@ fn main() {
 
     let port = args.value_of("port").unwrap_or("8000");
     let server_addr = format!("0.0.0.0:{}", port);
-    let server_addr_2 = format!("0.0.0.0:{}", 8001);
 
     let model = clap::value_t!(args.value_of("model"), usize).unwrap();
     assert!(model == 0 || model == 1);
@@ -42,5 +41,5 @@ fn main() {
     let minionn = [65536, 65536, 16384, 16384, 4096, 4096, 1024];
     let layers: &[usize] = if model == 0 { &mnist } else { &minionn };
 
-    experiments::latency::server::async_input_auth(&server_addr, &server_addr_2, layers, &mut rng);
+    experiments::latency::server::input_auth(&server_addr, layers, &mut rng);
 }

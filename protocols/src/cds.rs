@@ -1,3 +1,4 @@
+use crate::bytes;
 use crate::{error::MpcError, mpc::*, mpc_offline::*, InMessage, OutMessage};
 use algebra::{
     fields::{Fp64, Fp64Parameters, PrimeField},
@@ -9,7 +10,7 @@ use crypto_primitives::{
     gc::{fancy_garbling, fancy_garbling::Wire},
     PBeaversMul,
 };
-use io_utils::{IMuxAsync, IMuxSync};
+use io_utils::IMuxAsync;
 use itertools::{interleave, izip};
 use num_traits::{One, Zero};
 use protocols_sys::{ClientFHE, ServerFHE};
@@ -17,9 +18,10 @@ use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, Block, Channel};
 use std::{
-    io::{Read, Write},
     marker::PhantomData,
 };
+
+use async_std::io::{Read, Write};
 
 #[derive(Default)]
 pub struct CDSProtocol<P: FixedPointParameters> {
@@ -33,12 +35,11 @@ pub type InsecureMsgSend<'a, P> =
     OutMessage<'a, [<P as FixedPointParameters>::Field], InsecureCDSType>;
 pub type InsecureMsgRcv<P> = InMessage<Vec<<P as FixedPointParameters>::Field>, InsecureCDSType>;
 
-pub type InsecureLabelSend<'a> = OutMessage<'a, [Block], InsecureCDSType>;
-pub type InsecureLabelRcv = InMessage<Vec<Block>, InsecureCDSType>;
+pub type InsecureBlockSend<'a> = OutMessage<'a, [Block], InsecureCDSType>;
+pub type InsecureBlockRcv = InMessage<Vec<Block>, InsecureCDSType>;
 
 /// TODO: In-depth explanation
 /// TODO: Optimizations
-///     * Generate upper bits with a PRG key
 ///     * Only commit to one MAC key on AvgPool/Linear layers
 ///
 /// Server private inputs per layer:
@@ -115,8 +116,8 @@ where
     }
 
     fn cds_subcircuit<R, W, M>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         mpc: &mut M,
         modulus_bits: usize,
         elems_per_label: usize,
@@ -135,8 +136,8 @@ where
         MpcError,
     >
     where
-        R: Read + Send,
-        W: Write + Send,
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
         M: MPC<P::Field, PBeaversMul<<P::Field as PrimeField>::Params>>,
     {
         let bit_time = timer_start!(|| "Secret sharing GC labels");
@@ -200,9 +201,9 @@ where
         Ok((label_shares, rho_1, rho_2))
     }
 
-    pub fn server_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn server_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         sfhe: &ServerFHE,
         layer_sizes: &[usize],
         out_mac_keys: &[P::Field],
@@ -289,8 +290,7 @@ where
             let mut challenge_2 = P::Field::uniform(rng);
             let challenge = &[challenge_1, challenge_2];
             let send_message = InsecureMsgSend::<P>::new(challenge);
-            crate::bytes::serialize(&mut *writer, &send_message)?;
-            writer.flush()?;
+            bytes::serialize(&mut *writer, &send_message)?;
 
             let (label_shares, rho_1, rho_2) = CDSProtocol::<P>::cds_subcircuit(
                 reader,
@@ -331,7 +331,7 @@ where
             // Receive omega_1, omega_2
             // TODO: Rename insecure
             let recv_time = timer_start!(|| "Server receiving sigma");
-            let recv_message: InsecureMsgRcv<P> = crate::bytes::deserialize(&mut *reader)?;
+            let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
             let msg = recv_message.msg();
             let client_sigma_1 = msg[0];
             let client_sigma_2 = msg[1];
@@ -359,9 +359,9 @@ where
         Ok(())
     }
 
-    pub fn client_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn client_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         cfhe: &ClientFHE,
         layer_sizes: &[usize],
         out_mac_shares: &[P::Field],
@@ -451,7 +451,7 @@ where
                 ..(labels_processed + 2 * layer_size * modulus_bits * elems_per_label);
 
             // Receive random challenges
-            let recv_message: InsecureMsgRcv<P> = crate::bytes::deserialize(&mut *reader)?;
+            let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
             let msg = recv_message.msg();
             let mut challenge_1 = msg[0];
             let mut challenge_2 = msg[1];
@@ -497,8 +497,7 @@ where
             let open_time = timer_start!(|| "Client sending sigmas");
             let sigma = &[sigma_1, sigma_2];
             let send_message = InsecureMsgSend::<P>::new(sigma);
-            crate::bytes::serialize(&mut *writer, &send_message)?;
-            writer.flush()?;
+            bytes::serialize(&mut *writer, &send_message)?;
             timer_end!(open_time);
 
             // Receive label shares
@@ -525,9 +524,9 @@ where
 
     /// Insecure protocol where server receives client input in cleartext,
     /// checks MACs, and sends back correct labels
-    pub fn insecure_server_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn insecure_server_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         _sfhe: &ServerFHE,
         layer_sizes: &[usize],
         output_mac_keys: &[P::Field],
@@ -539,13 +538,13 @@ where
     ) -> Result<(), MpcError> {
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         // Receive inputs
-        let recv_message: InsecureMsgRcv<P> = crate::bytes::deserialize(&mut *reader)?;
+        let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
         let client_output_mac_shares = recv_message.msg();
-        let recv_message: InsecureMsgRcv<P> = crate::bytes::deserialize(&mut *reader)?;
+        let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
         let client_output_shares = recv_message.msg();
-        let recv_message: InsecureMsgRcv<P> = crate::bytes::deserialize(&mut *reader)?;
+        let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
         let client_input_mac_shares = recv_message.msg();
-        let recv_message: InsecureMsgRcv<P> = crate::bytes::deserialize(&mut *reader)?;
+        let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
         let client_input_rands = recv_message.msg();
 
         // Check MACs
@@ -595,22 +594,21 @@ where
             .map(|b| b == 1)
             .collect();
 
-        let mut readers = reader.get_mut_ref();
-        let mut writers = writer.get_mut_ref();
-
-        let mut channel = Channel::new(&mut readers[0], &mut writers[0]);
-        izip!(gc_bits, labels.iter()).for_each(|(b, (zero, one))| {
-            let block = if b { one } else { zero };
-            channel.write_block(&block).unwrap();
-        });
-        writer.flush().map_err(|e| e.into())
+        let client_labels: Vec<Block> = izip!(gc_bits, labels)
+            .map(|(b, (zero, one))| {
+                if b { one.clone() } else { zero.clone() }
+            })
+            .collect();
+        let send_message = InsecureBlockSend::new(&client_labels);
+        bytes::serialize(&mut *writer, &send_message)?;
+        Ok(())
     }
 
     /// Insecure protocol where server receives client input in cleartext,
     /// checks MACs, and sends back correct labels
-    pub fn insecure_client_cds<R: Read + Send, W: Write + Send, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+    pub fn insecure_client_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         _cfhe: &ClientFHE,
         _layer_sizes: &[usize],
         output_mac_shares: &[P::Field],
@@ -622,24 +620,16 @@ where
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         // Send everything to the server
         let send_message = InsecureMsgSend::<P>::new(&output_mac_shares);
-        crate::bytes::serialize(&mut *writer, &send_message)?;
+        bytes::serialize(&mut *writer, &send_message)?;
         let send_message = InsecureMsgSend::<P>::new(&output_shares);
-        crate::bytes::serialize(&mut *writer, &send_message)?;
+        bytes::serialize(&mut *writer, &send_message)?;
         let send_message = InsecureMsgSend::<P>::new(&input_mac_shares);
-        crate::bytes::serialize(&mut *writer, &send_message)?;
+        bytes::serialize(&mut *writer, &send_message)?;
         let send_message = InsecureMsgSend::<P>::new(&input_rands);
-        crate::bytes::serialize(&mut *writer, &send_message)?;
-        writer.flush().unwrap();
-
-        let mut readers = reader.get_mut_ref();
-        let mut writers = writer.get_mut_ref();
-
-        // Receive back labels
-        let mut channel = Channel::new(&mut readers[0], &mut writers[0]);
-        let num_labels = (output_shares.len() + input_rands.len()) * modulus_bits;
-        let labels: Vec<Block> = (0..num_labels)
-            .map(|_| channel.read_block())
-            .collect::<Result<Vec<_>, _>>()?;
+        bytes::serialize(&mut *writer, &send_message)?;
+        
+        let recv_message: InsecureBlockRcv = bytes::deserialize(&mut *reader)?;
+        let labels = recv_message.msg();
         Ok(labels
             .into_iter()
             .map(|l| Wire::from_block(l, 2))
@@ -653,6 +643,8 @@ mod tests {
     use algebra::{fields::near_mersenne_64::F, fixed_point::FixedPointParameters};
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaChaRng;
+
+    // TODO: Add more tests here
 
     struct TenBitExpParams {}
     impl FixedPointParameters for TenBitExpParams {

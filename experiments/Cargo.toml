@@ -37,7 +37,6 @@ clap = "2.33.3"
 async-std = "1.9.0"
 futures = "0.3.12"
 io-utils = { git = "https://github.com/ryanleh/io-utils", branch = "main" }
-bincode = "1.0"
 
 [lib]
 name = "experiments"
@@ -98,7 +97,7 @@ path = "src/latency/cds/server.rs"
 [[bin]]
 name = "cds-client"
 path = "src/latency/cds/client.rs"
-#
+
 [[bin]]
 name = "input-auth-server"
 path = "src/latency/input_auth/server.rs"
@@ -106,7 +105,7 @@ path = "src/latency/input_auth/server.rs"
 [[bin]]
 name = "input-auth-client"
 path = "src/latency/input_auth/client.rs"
-#
+
 #[[bin]]
 #name = "input-auth-ltme-server"
 #path = "src/latency/input_auth_ltme/server.rs"
@@ -114,7 +113,7 @@ path = "src/latency/input_auth/client.rs"
 #[[bin]]
 #name = "input-auth-ltme-client"
 #path = "src/latency/input_auth_ltme/client.rs"
-#
+
 [[bin]]
 name = "acg-server"
 path = "src/latency/acg/server.rs"

@@ -5,6 +5,7 @@ use algebra::{
     UniformRandom,
 };
 use crypto_primitives::additive_share::{AuthAdditiveShare, AuthShare, Share};
+use io_utils::IMuxSync;
 use neural_network::{
     layers::{average_pooling::*, convolution::*, fully_connected::*, *},
     tensors::*,
@@ -252,8 +253,8 @@ mod gc {
 
                 for stream in server_listener.incoming() {
                     let stream = stream.expect("Client connection failed!");
-                    let mut write_stream = BufWriter::new(&stream);
-                    let mut read_stream = BufReader::new(&stream);
+                    let mut write_stream = IMuxSync::new(vec![BufWriter::new(&stream)]);
+                    let mut read_stream = IMuxSync::new(vec![BufReader::new(&stream)]);
                     // Keygen
                     let key_time = timer_start!(|| "Receiving keys");
                     let keys: ServerKeyRcv = crate::bytes::deserialize(&mut read_stream).unwrap();
@@ -281,8 +282,8 @@ mod gc {
             let client_offline_result = s.spawn(|_| {
                 // client's connection to server.
                 let stream = TcpStream::connect(server_addr).unwrap();
-                let mut write_stream = BufWriter::new(&stream);
-                let mut read_stream = BufReader::new(&stream);
+                let mut write_stream = IMuxSync::new(vec![BufWriter::new(&stream)]);
+                let mut read_stream = IMuxSync::new(vec![BufReader::new(&stream)]);
 
                 let mut rng = ChaChaRng::from_seed(RANDOMNESS);
 
@@ -323,8 +324,8 @@ mod gc {
                 let client_labels = &client_offline.client_input_labels;
                 for stream in client_listener.incoming() {
                     let stream = stream.expect("Client connection failed!");
-                    let mut write_stream = BufWriter::new(&stream);
-                    let mut read_stream = BufReader::new(&stream);
+                    let mut write_stream = IMuxSync::new(vec![BufWriter::new(&stream)]);
+                    let mut read_stream = IMuxSync::new(vec![BufReader::new(&stream)]);
                     return ReluProtocol::<TenBitExpParams>::online_client_protocol(
                         &mut read_stream,
                         &mut write_stream,
@@ -342,8 +343,8 @@ mod gc {
             let result = s
                 .spawn(|_| {
                     let stream = TcpStream::connect(client_addr).unwrap();
-                    let mut write_stream = BufWriter::new(&stream);
-                    let mut read_stream = BufReader::new(&stream);
+                    let mut write_stream = IMuxSync::new(vec![BufWriter::new(&stream)]);
+                    let mut read_stream = IMuxSync::new(vec![BufReader::new(&stream)]);
 
                     ReluProtocol::online_server_protocol(
                         &mut read_stream,
@@ -394,8 +395,8 @@ mod linear {
                     let mut rng = ChaChaRng::from_seed(RANDOMNESS);
                     for stream in server_listener.incoming() {
                         let stream = stream.expect("server connection failed!");
-                        let mut reader = BufReader::new(&stream);
-                        let mut writer = BufWriter::new(&stream);
+                        let mut reader = IMuxSync::new(vec![BufReader::new(&stream)]);
+                        let mut writer = IMuxSync::new(vec![BufWriter::new(&stream)]);
 
                         // Keygen
                         let key_time = timer_start!(|| "Receiving keys");
@@ -442,8 +443,8 @@ mod linear {
                     let write_stream =
                         TcpStream::connect(server_addr).expect("connecting to server failed");
                     let read_stream = write_stream.try_clone().unwrap();
-                    let mut reader = BufReader::new(&read_stream);
-                    let mut writer = BufWriter::new(&write_stream);
+                    let mut reader = IMuxSync::new(vec![BufReader::new(&read_stream)]);
+                    let mut writer = IMuxSync::new(vec![BufWriter::new(&write_stream)]);
 
                     // Keygen
                     let key_time = timer_start!(|| "Client Keygen");
@@ -535,7 +536,8 @@ mod linear {
         let server_layer_share = crossbeam::thread::scope(|s| {
             // Start thread for client.
             let result = s.spawn(|_| {
-                let mut write_stream = TcpStream::connect(server_addr).unwrap();
+                let mut write_stream =
+                    IMuxSync::new(vec![TcpStream::connect(server_addr).unwrap()]);
                 LinearProtocol::online_client_protocol(
                     &mut write_stream,
                     &server_input_share,
@@ -547,10 +549,11 @@ mod linear {
             let server_result = s
                 .spawn(|_| {
                     for stream in server_listener.incoming() {
-                        let read_stream = stream.expect("server connection failed!");
+                        let mut read_stream =
+                            IMuxSync::new(vec![stream.expect("server connection failed!")]);
                         let mut output = Output::zeros(output_dims);
                         return LinearProtocol::online_server_protocol(
-                            read_stream,           // we only receive here, no messages to client
+                            &mut read_stream,      // we only receive here, no messages to client
                             layer,                 // layer parameters
                             &server_randomizers.1, // this is our `s` from above.
                             &Input::zeros(input_dims),
@@ -736,20 +739,26 @@ mod network {
                     .next()
                     .unwrap()
                     .expect("Server connection failed!");
-                let write_stream = stream.try_clone().unwrap();
-                let read_stream = BufReader::new(stream);
-                NNProtocol::offline_server_protocol(read_stream, write_stream, &network, &mut rng)
+                let mut write_stream = IMuxSync::new(vec![stream.try_clone().unwrap()]);
+                let mut read_stream = IMuxSync::new(vec![BufReader::new(stream)]);
+                NNProtocol::offline_server_protocol(
+                    &mut read_stream,
+                    &mut write_stream,
+                    &network,
+                    &mut rng,
+                )
             });
 
             let client_state = s.spawn(|_| {
                 // This is mainly for Valgrind debugging to not fail
                 std::thread::sleep(std::time::Duration::new(1, 0));
                 let stream = TcpStream::connect(server_addr).expect("Client connection failed!");
-                let read_stream = BufReader::new(stream.try_clone().unwrap());
-                let write_stream = stream;
+                let mut read_stream =
+                    IMuxSync::new(vec![BufReader::new(stream.try_clone().unwrap())]);
+                let mut write_stream = IMuxSync::new(vec![stream]);
                 NNProtocol::offline_client_protocol(
-                    read_stream,
-                    write_stream,
+                    &mut read_stream,
+                    &mut write_stream,
                     &architecture,
                     &mut rng,
                 )
@@ -771,11 +780,11 @@ mod network {
                     .next()
                     .unwrap()
                     .expect("server connection failed!");
-                let write_stream = stream.try_clone().unwrap();
-                let read_stream = BufReader::new(stream);
+                let mut write_stream = IMuxSync::new(vec![stream.try_clone().unwrap()]);
+                let mut read_stream = IMuxSync::new(vec![BufReader::new(stream)]);
                 NNProtocol::online_server_protocol(
-                    read_stream,
-                    write_stream,
+                    &mut read_stream,
+                    &mut write_stream,
                     &network,
                     &server_state,
                 )
@@ -784,12 +793,12 @@ mod network {
             let result = s.spawn(|_| {
                 // This is mainly for Valgrind debugging to not fail
                 std::thread::sleep(std::time::Duration::new(1, 0));
-                let write_stream =
-                    TcpStream::connect(server_addr).expect("Client connection failed!");
-                let read_stream = BufReader::new(write_stream.try_clone().unwrap());
+                let stream = TcpStream::connect(server_addr).expect("Client connection failed!");
+                let mut write_stream = IMuxSync::new(vec![stream.try_clone().unwrap()]);
+                let mut read_stream = IMuxSync::new(vec![BufReader::new(stream)]);
                 NNProtocol::online_client_protocol(
-                    read_stream,
-                    write_stream,
+                    &mut read_stream,
+                    &mut write_stream,
                     &input,
                     &architecture,
                     &client_state,

@@ -1,15 +1,16 @@
+use crate::bytes;
 use crate::{error::MpcError, InMessage, OutMessage};
 use algebra::fields::{Fp64, Fp64Parameters};
 use crypto_primitives::{
     additive_share::{AdditiveShare, AuthAdditiveShare, AuthShare, Share},
     beavers_mul::{BeaversMul, BlindedInputs, BlindedSharedInputs, PBeaversMul, Triple},
 };
-use io_utils::{IMuxAsync, IMuxSync};
+use io_utils::IMuxAsync;
 use itertools::izip;
 use num_traits::identities::Zero;
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
-use std::io::{Read, Write};
+use async_std::io::{Read, Write};
 
 pub struct MpcProtocolType;
 
@@ -38,41 +39,41 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
     const PARTY_IDX: usize;
 
     /// Share `inputs` with the other party
-    fn private_inputs<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+    fn private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         inputs: &[T],
         rng: &mut RNG,
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
 
     /// Receive `num_recv` shares from the other party
-    fn recv_private_inputs<R: Read + Send, W: Write + Send>(
+    fn recv_private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
 
     /// Opens `shares` to the other party
-    fn private_open<W: Write + Send>(
+    fn private_open<W: Write + Send + Unpin>(
         &self,
-        writer: &mut IMuxSync<W>,
+        writer: &mut IMuxAsync<W>,
         shares: &[AuthAdditiveShare<T>],
     ) -> Result<(), MpcError>;
 
     /// Receive `shares` from the other party
-    fn private_recv<R: Read + Send>(
+    fn private_recv<R: Read + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
+        reader: &mut IMuxAsync<R>,
         shares: &[AuthAdditiveShare<T>],
     ) -> Result<Vec<T>, MpcError>;
 
     /// Opens `shares` publically and returns result
-    fn public_open<R: Read + Send, W: Write + Send>(
+    fn public_open<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         shares: &[AuthAdditiveShare<T>],
     ) -> Result<Vec<T>, MpcError>;
 
@@ -106,11 +107,68 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
         Ok(izip!(x, y).map(|(l, r)| l - r).collect())
     }
 
+
+// TODO
+//    async fn mul<D: EvaluationDomain<F>>(
+//        &mut self,
+//        a: Evaluations<F, D>,
+//        b: Evaluations<F, D>,
+//    ) -> Result<Evaluations<F, D>, DelegationError> {
+//        let domain = a.domain().clone();
+//
+//        // Consume necessary triples
+//        let req_triples = a.evals.len();
+//        let triples = self.get_triples(req_triples)?;
+//
+//        // Compute blinded shares using the triples.
+//        let blinded_shares = a
+//            .evals
+//            .into_iter()
+//            .zip(b.evals.into_iter())
+//            .zip(triples.iter())
+//            .map(|((a, b), t)| FBeaversMul::share_and_blind_inputs(&a, &b, t))
+//            .collect::<Vec<_>>();
+//
+//        // Send blinded shares to all parties
+//        let send_shares_f = self
+//            .writers
+//            .iter_mut()
+//            .map(|w| crate::IO::serialize_write_and_flush(&blinded_shares, w))
+//            .collect::<FuturesUnordered<_>>()
+//            .collect::<Vec<_>>();
+//
+//        // Receive blinded shares from all parties
+//        let recv_shares_f = self
+//            .readers
+//            .iter_mut()
+//            .map(|r| crate::IO::read_and_deserialize::<Vec<BlindedSharedInputs<F>>, R>(r))
+//            .collect::<FuturesUnordered<_>>();
+//
+//        // Combine all vectors of shares together
+//        let blinded_inputs =
+//            recv_shares_f.fold(Ok(blinded_shares.clone()), |a, b| Self::add_entries(a, b));
+//
+//        // Concurrently receive/add shares together and send shares
+//        let (blinded_inputs, send_shares_f) = join(blinded_inputs, send_shares_f).await;
+//
+//        // Unwrap any errors that occured when sending.
+//        send_shares_f.into_iter().collect::<Result<Vec<_>, _>>()?;
+//
+//        // Use blinded_inputs and triples to compute local share
+//        let result = blinded_inputs?
+//            .into_iter()
+//            .zip(triples)
+//            .map(|(bi, t)| FBeaversMul::multiply_blinded_inputs(self.party_idx, bi.into(), &t))
+//            .collect();
+//
+//        Ok(Evaluations::from_vec_and_domain(result, domain))
+//    }
+
     /// Multiply shares `x` and `y`
-    fn mul<R: Read + Send, W: Write + Send>(
+    fn mul<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         x: &[AuthAdditiveShare<T>],
         y: &[AuthAdditiveShare<T>],
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError> {
@@ -134,7 +192,7 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
             // Receive blinded shares
             s.spawn(|_| {
                 for _ in self_blinded_and_shared.chunks(Self::BATCH_SIZE) {
-                    let in_msg: MulMsgRcv<_> = crate::bytes::deserialize(&mut *reader).unwrap();
+                    let in_msg: MulMsgRcv<_> = bytes::deserialize(&mut *reader).unwrap();
                     let shares = in_msg.msg();
                     snd.send(shares).unwrap();
                 }
@@ -146,8 +204,7 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
             s.spawn(|_| {
                 for msg_contents in self_blinded_and_shared.chunks(Self::BATCH_SIZE) {
                     let sent_message = MulMsgSend::new(&msg_contents);
-                    crate::bytes::serialize(&mut *writer, &sent_message).unwrap();
-                    writer.flush().unwrap();
+                    bytes::serialize(&mut *writer, &sent_message).unwrap();
                 }
             });
             // Open blinded shares and perform multiplication
@@ -276,10 +333,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     const PARTY_IDX: usize = 2;
 
     /// Share `inputs` with the server
-    fn private_inputs<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+    fn private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         inputs: &[Fp64<P>],
         _: &mut RNG,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
@@ -306,8 +363,7 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
                     })
                     .collect();
                 let send_message = ConstantMsgSend::new(epsilon_vec.as_slice());
-                crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                writer.flush().unwrap();
+                bytes::serialize(&mut *writer, &send_message).unwrap();
             }
         })
         .unwrap();
@@ -315,10 +371,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     }
 
     /// Receive `num_recv` shares from the server
-    fn recv_private_inputs<R: Read + Send, W: Write + Send>(
+    fn recv_private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         let mut shares = Vec::with_capacity(num_recv);
@@ -327,36 +383,35 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
         // TODO: Thread this
         for _ in 0..((num_recv as f64 / Self::BATCH_SIZE as f64).ceil() as usize) {
             let recv_message: AuthShareRcv<Fp64<P>> =
-                crate::bytes::deserialize(&mut *reader).unwrap();
+                bytes::deserialize(&mut *reader).unwrap();
             shares.extend(recv_message.msg());
         }
         Ok(shares)
     }
 
     /// To open a share to the server, the client sends full AuthAdditiveShare
-    fn private_open<W: Write + Send>(
+    fn private_open<W: Write + Send + Unpin>(
         &self,
-        writer: &mut IMuxSync<W>,
+        writer: &mut IMuxAsync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<(), MpcError> {
         for shares_chunk in shares.chunks(Self::BATCH_SIZE) {
             let send_message = AuthShareSend::new(shares_chunk);
-            crate::bytes::serialize(&mut *writer, &send_message)?;
-            writer.flush()?;
+            bytes::serialize(&mut *writer, &send_message)?;
         }
         Ok(())
     }
 
     /// To receive a share from the server, the client is given an AdditiveShare
     /// which it adds to its AuthAdditiveShare
-    fn private_recv<R: Read + Send>(
+    fn private_recv<R: Read + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
+        reader: &mut IMuxAsync<R>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         let mut recv_shares = Vec::with_capacity(shares.len());
         for _ in 0..((shares.len() as f64 / Self::BATCH_SIZE as f64).ceil() as usize) {
-            let recv_message: ShareRcv<Fp64<P>> = crate::bytes::deserialize(&mut *reader)?;
+            let recv_message: ShareRcv<Fp64<P>> = bytes::deserialize(&mut *reader)?;
             recv_shares.extend(recv_message.msg());
         }
         let result = izip!(shares.iter(), recv_shares.iter())
@@ -365,10 +420,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
         Ok(result)
     }
 
-    fn public_open<R: Read + Send, W: Write + Send>(
+    fn public_open<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         self.private_open(writer, shares)?;
@@ -409,10 +464,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     const PARTY_IDX: usize = 1;
 
     /// Share `inputs` with the client
-    fn private_inputs<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+    fn private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         inputs: &[Fp64<P>],
         rng: &mut RNG,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
@@ -426,17 +481,16 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
         // TODO: Thread this
         for client_share in client_shares.chunks(Self::BATCH_SIZE) {
             let send_message = AuthShareSend::new(client_share);
-            crate::bytes::serialize(&mut *writer, &send_message)?;
-            writer.flush()?;
+            bytes::serialize(&mut *writer, &send_message)?;
         }
         Ok(server_shares)
     }
 
     /// Receive `num_recv` shares from the client
-    fn recv_private_inputs<R: Read + Send, W: Write + Send>(
+    fn recv_private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         // Consume necessary random shares
@@ -452,7 +506,7 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
             // Receive epsilon and compute share
             for r_chunk in rands.chunks(Self::BATCH_SIZE) {
                 let recv_message: ConstantMsgRcv<Fp64<P>> =
-                    crate::bytes::deserialize(&mut *reader).unwrap();
+                    bytes::deserialize(&mut *reader).unwrap();
                 let epsilon = recv_message.msg();
                 izip!(r_chunk, epsilon.iter()).for_each(|(r, e)| result.push(r.add_constant(*e)));
             }
@@ -462,17 +516,16 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     }
 
     /// To open a share to the client, the server sends AdditiveShares
-    fn private_open<W: Write + Send>(
+    fn private_open<W: Write + Send + Unpin>(
         &self,
-        writer: &mut IMuxSync<W>,
+        writer: &mut IMuxAsync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<(), MpcError> {
         let stripped_shares: Vec<AdditiveShare<Fp64<P>>> =
             shares.par_iter().map(|e| e.get_value()).collect();
         for shares in stripped_shares.chunks(Self::BATCH_SIZE) {
             let send_message = ShareSend::new(shares);
-            crate::bytes::serialize(&mut *writer, &send_message)?;
-            writer.flush()?;
+            bytes::serialize(&mut *writer, &send_message)?;
         }
         Ok(())
     }
@@ -480,14 +533,14 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     /// To receive a share from the client, the server is sent an
     /// AuthAdditiveShare. It adds the share to `unchecked` and
     /// eagerly opens value
-    fn private_recv<R: Read + Send>(
+    fn private_recv<R: Read + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
+        reader: &mut IMuxAsync<R>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         let mut recv_shares = Vec::with_capacity(shares.len());
         for _ in 0..((shares.len() as f64 / Self::BATCH_SIZE as f64).ceil() as usize) {
-            let recv_message: AuthShareRcv<Fp64<P>> = crate::bytes::deserialize(&mut *reader)?;
+            let recv_message: AuthShareRcv<Fp64<P>> = bytes::deserialize(&mut *reader)?;
             recv_shares.extend(recv_message.msg());
         }
         let result = izip!(shares.iter(), recv_shares.iter())
@@ -500,10 +553,10 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
         Ok(result)
     }
 
-    fn public_open<R: Read + Send, W: Write + Send>(
+    fn public_open<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         shares: &[AuthAdditiveShare<Fp64<P>>],
     ) -> Result<Vec<Fp64<P>>, MpcError> {
         let result = Self::private_recv(self, reader, shares);
@@ -546,12 +599,18 @@ mod tests {
     use super::*;
     use algebra::{fields::near_mersenne_64::F, UniformRandom};
     use crypto_primitives::beavers_mul::InsecureTripleGen;
+    use io_utils::IMuxAsync;
     use num_traits::identities::Zero;
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaChaRng;
-    use std::{
+    use async_std::{
         io::{BufReader, BufWriter, Read, Write},
         net::{TcpListener, TcpStream},
+        task
+    };
+    use futures::{
+        stream::{FuturesUnordered, StreamExt},
+        SinkExt,
     };
 
     const RANDOMNESS: [u8; 32] = [
@@ -560,27 +619,32 @@ mod tests {
         0x52, 0xd2,
     ];
 
-    fn get_connection(server_addr: &str) -> ((impl Read, impl Write), (impl Read, impl Write)) {
+    fn get_connection(server_addr: &str) -> ((IMuxAsync<impl Read>, IMuxAsync<impl Write>), (IMuxAsync<impl Read>, IMuxAsync<impl Write>)) {
         crossbeam::thread::scope(|s| {
             let server_io = s.spawn(|_| {
-                let server_listener = TcpListener::bind(server_addr).unwrap();
-                let stream = server_listener
-                    .incoming()
-                    .next()
-                    .unwrap()
-                    .expect("Server connection failed!");
-                let read_stream = BufReader::new(stream.try_clone().unwrap());
-                let write_stream = BufWriter::new(stream);
-                (read_stream, write_stream)
+                task::block_on(async {
+                    let server_listener = TcpListener::bind(server_addr).await.unwrap();
+                    let stream = server_listener
+                        .incoming()
+                        .next()
+                        .await
+                        .unwrap()
+                        .expect("Server connection failed!");
+                    let read_stream = IMuxAsync::new(vec![BufReader::new(stream.clone())]);
+                    let write_stream = IMuxAsync::new(vec![BufWriter::new(stream)]);
+                    (read_stream, write_stream)
+                })
             });
             // Sometimes the client thread will start too soon and connection fails so put a
             // small delay
             std::thread::sleep(std::time::Duration::from_millis(10));
             let client_io = s.spawn(|_| {
-                let stream = TcpStream::connect(server_addr).expect("Client connection failed!");
-                let read_stream = BufReader::new(stream.try_clone().unwrap());
-                let write_stream = BufWriter::new(stream);
-                (read_stream, write_stream)
+                task::block_on(async {
+                    let stream = TcpStream::connect(server_addr).await.expect("Client connection failed!");
+                    let read_stream = IMuxAsync::new(vec![BufReader::new(stream.clone())]);
+                    let write_stream = IMuxAsync::new(vec![BufWriter::new(stream)]);
+                    (read_stream, write_stream)
+                })
             });
             (client_io.join().unwrap(), server_io.join().unwrap())
         })

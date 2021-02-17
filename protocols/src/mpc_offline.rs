@@ -1,11 +1,11 @@
-use crate::mpc::{ShareRcv, ShareSend};
+use crate::bytes;
 use crate::{InMessage, OutMessage};
 use algebra::{Fp64, Fp64Parameters, PrimeField, UniformRandom};
 use crypto_primitives::{
-    additive_share::{AuthAdditiveShare, AuthShare, Share},
+    additive_share::{AdditiveShare, AuthAdditiveShare, AuthShare, Share},
     beavers_mul::Triple,
 };
-use io_utils::{IMuxAsync, IMuxSync};
+use io_utils::IMuxAsync;
 use itertools::izip;
 use num_traits::Zero;
 use protocols_sys::{ClientFHE, ClientGen, SealClientGen, SealServerGen, ServerFHE, ServerGen};
@@ -14,14 +14,19 @@ use rand::{ChaChaRng, CryptoRng, RngCore, SeedableRng};
 use rayon::prelude::*;
 use std::{
     cmp::min,
-    io::{Read, Write},
     marker::PhantomData,
     os::raw::c_char,
     sync::{Arc, Mutex},
 };
 
 // TODO
-use async_std::{channel, prelude::*, sync::RwLock, task};
+use async_std::{
+    channel,
+    io::{Read, Write},
+    prelude::*,
+    sync::RwLock,
+    task
+};
 use futures::{
     stream::{FuturesUnordered, StreamExt},
     SinkExt,
@@ -31,6 +36,9 @@ pub struct OfflineMPCProtocolType;
 
 type MsgSend<'a> = OutMessage<'a, (usize, Vec<c_char>), OfflineMPCProtocolType>;
 type MsgRcv = InMessage<(usize, Vec<c_char>), OfflineMPCProtocolType>;
+
+pub type ShareSend<'a, T> = OutMessage<'a, [AdditiveShare<T>], OfflineMPCProtocolType>;
+pub type ShareRcv<T> = InMessage<Vec<AdditiveShare<T>>, OfflineMPCProtocolType>;
 
 const RANDOMNESS: [u8; 32] = [
     0x99, 0xe0, 0x8f, 0xbc, 0x89, 0xa7, 0x34, 0x01, 0x45, 0x86, 0x82, 0xb6, 0x51, 0xda, 0xf4, 0x76,
@@ -44,48 +52,22 @@ pub trait OfflineMPC<T: AuthShare> {
     const BATCH_SIZE: usize = 8192;
 
     /// Generates `num` authenticated pairwise randomness shares
-    fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+    fn rands_gen<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<T>>;
 
-    /// An version of `rands_gen` which uses asyncronous IO
-    fn async_rands_gen<R, W, RNG>(
+    /// Generates `num` authenticated triples
+    fn triples_gen<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<AuthAdditiveShare<T>>
-    where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng;
-
-    /// Generates `num` authenticated triples
-    fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<T>>;
-
-    /// An version of `triples_gen` which uses asyncronous IO
-    fn async_triples_gen<R, W, RNG>(
-        &self,
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<Triple<T>>
-    where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng;
 }
 
 pub struct ClientOfflineMPC<T: AuthShare, C: ClientGen> {
@@ -117,10 +99,12 @@ impl<'a, P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'a>> {
 }
 
 impl<P: Fp64Parameters> ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
-    pub fn optimized_input<W: Write + Send, RNG: RngCore + CryptoRng>(
+    // TODO: Explain that this is for LTME assumption
+    // TODO
+    pub fn optimized_input<W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
         keys: &ServerFHE,
-        writer: &mut IMuxSync<W>,
+        writer: &mut IMuxAsync<W>,
         input: &[Fp64<P>],
         mac_key_ct: &mut SealCT,
         rng: &mut RNG,
@@ -156,36 +140,37 @@ impl<P: Fp64Parameters> ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
             let send_message = ShareSend::new(
                 &server_shares[i * Self::BATCH_SIZE..min((i + 1) * Self::BATCH_SIZE, input.len())],
             );
-            crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-            let msg = (i, server_mac_ct[i].clone()); // TODO
+            bytes::serialize(&mut *writer, &send_message).unwrap();
+            let msg = (i, server_mac_ct[i].clone());
             let send_message = MsgSend::new(&msg);
-            crate::bytes::serialize(&mut *writer, &send_message).unwrap();
+            bytes::serialize(&mut *writer, &send_message).unwrap();
         }
-        writer.flush().unwrap();
         client_auth_shares
     }
 
-    pub fn recv_mac<R: Read + Send>(&self, reader: &mut IMuxSync<R>) -> Vec<c_char> {
-        let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-        recv_message.msg().1
-    }
+// TODO
+//    pub fn recv_mac<R: Read + Send + Unpin>(&self, reader: &mut IMuxAsync<R>) -> Vec<c_char> {
+//        let recv_message: MsgRcv = bytes::deserialize(&mut *reader).unwrap();
+//        recv_message.msg().1
+//    }
 }
 
 impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
-    pub fn recv_optimized_input<R: Read + Send>(
+    // TODO: Explain that this is for LTME assumption
+    // TODO
+    pub fn recv_optimized_input<R: Read + Send + Unpin>(
         &self,
         keys: &ClientFHE,
-        reader: &mut IMuxSync<R>,
+        reader: &mut IMuxAsync<R>,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
         // Receive batches of shares
         let mut shares = Vec::with_capacity(num);
         for i in 0..((num as f64 / Self::BATCH_SIZE as f64).ceil() as usize) {
-            let recv_message: ShareRcv<_> = crate::bytes::deserialize(&mut *reader).unwrap();
+            let recv_message: ShareRcv<_> = bytes::deserialize(&mut *reader).unwrap();
             let share = recv_message.msg();
-            let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
+            let recv_message: MsgRcv = bytes::deserialize(&mut *reader).unwrap();
             let (_, mac_share_ct) = recv_message.msg();
-
             let mut tmp = SealCT::new();
             let mac_shares = if i * Self::BATCH_SIZE > num {
                 tmp.decrypt_vec(keys, mac_share_ct, num - (i - 1) * Self::BATCH_SIZE)
@@ -200,128 +185,16 @@ impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
         shares
     }
 
-    pub fn send_mac<W: Write + Send>(&self, writer: &mut IMuxSync<W>, mac_key: Vec<c_char>) {
-        let msg = (0, mac_key);
-        let send_message = MsgSend::new(&msg);
-        crate::bytes::serialize(writer, &send_message).unwrap();
-    }
+// TODO
+//    pub fn send_mac<W: Write + Send + Unpin>(&self, writer: &mut IMuxAsync<W>, mac_key: Vec<c_char>) {
+//        let msg = (0, mac_key);
+//        let send_message = MsgSend::new(&msg);
+//        bytes::serialize(writer, &send_message).unwrap();
+//    }
 }
 
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
-    fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
-        let start_time = timer_start!(|| "Client pairwise randomness generation");
-        let mut rands = Vec::with_capacity(num);
-        for _ in 0..num {
-            rands.push(Fp64::<P>::uniform(rng).into_repr().0);
-        }
-
-        // Process and send the shares in batches
-        let batches = (num as f64 / Self::BATCH_SIZE as f64).ceil() as usize;
-        let n_threads = min(rayon::current_num_threads(), batches);
-        let batches_per_thread = (batches as f64 / n_threads as f64).ceil() as usize;
-
-        // TODO: Iterate over batches, each returns a seal_state + something to send
-        // TODO: Concurrently, send the to_send and then wait to receive the result
-
-        // Wrap writer in a Mutex for use in multiple threads.
-        let writer_mutex = Mutex::new(writer);
-        // Store the SEAL state needed for each batch
-        let states_mutex = Mutex::new(vec![None; batches]);
-        let mut result = vec![AuthAdditiveShare::zero(); num];
-        // We use rayon scoping so that all threads are executed in the threadpool
-        rayon::scope(|s| {
-            // TODO
-            let pre_time = timer_start!(|| "Preprocessing");
-            // We don't use par_iter here because we want to asynchronously send and receive
-            // batches
-            for thread_idx in 0..n_threads {
-                // TODO
-                let batches = if thread_idx == n_threads - 1 && batches % batches_per_thread != 0 {
-                    batches % batches_per_thread
-                } else {
-                    batches_per_thread
-                };
-                let thread_range = Self::BATCH_SIZE * (thread_idx * batches_per_thread)
-                    ..min(
-                        Self::BATCH_SIZE * (thread_idx * batches_per_thread + batches),
-                        num,
-                    );
-                // Create local references that the closure can borrow
-                let batch = &rands[thread_range.clone()];
-                let states_mutex = &states_mutex;
-                let writer_mutex = &writer_mutex;
-                s.spawn(move |_| {
-                    for i in 0..batches {
-                        let batch_range =
-                            Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), batch.len());
-                        let batch_idx = thread_idx * batches_per_thread + i;
-                        let (mut seal_state, ct) =
-                            self.backend.rands_preprocess(&batch[batch_range.clone()]);
-                        // Send input to server
-                        let mut writer = writer_mutex.lock().unwrap();
-                        let msg = (batch_idx, ct);
-                        let send_message = MsgSend::new(&msg);
-                        crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                        // Store SEAL state
-                        self.backend.rands_free_ct(&mut seal_state);
-                        let mut states = states_mutex.lock().unwrap();
-                        states[batch_idx] = Some(seal_state);
-                        if i % 6 == 0 {
-                            // Proving time
-                            std::thread::sleep(std::time::Duration::from_millis(385));
-                            // Sending time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                        }
-                    }
-                });
-            }
-            // Flush the writer - we don't need to return the lock since we don't write
-            // again
-            writer_mutex.lock().unwrap().flush().unwrap();
-            timer_end!(pre_time);
-
-            let recv_time = timer_start!(|| "Receiving result");
-            for _ in 0..batches {
-                // Receive ciphertexts from the server
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (i, mut r_ct) = recv_message.msg();
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (j, mut r_mac_ct) = recv_message.msg();
-                assert_eq!(i, j);
-                // This is guaranteed to be Some(..) since we only receive `i`
-                // that the server has finished processing (and thus received)
-                let mut seal_state = states_mutex.lock().unwrap()[i].unwrap();
-                let (r_share, r_mac_share) = self.backend.rands_postprocess(
-                    &mut seal_state,
-                    r_ct.as_mut_slice(),
-                    r_mac_ct.as_mut_slice(),
-                );
-                let recv_shares = izip!(r_share, r_mac_share)
-                    .map(|(v, m)| {
-                        AuthAdditiveShare::new(Fp64::from_repr(v.into()), Fp64::from_repr(m.into()))
-                    })
-                    .collect::<Vec<_>>();
-                for (old, new) in izip!(
-                    (*result)[Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), num)]
-                        .iter_mut(),
-                    recv_shares.iter()
-                ) {
-                    *old = *new;
-                }
-            }
-            timer_end!(recv_time);
-        });
-        timer_end!(start_time);
-        result
-    }
-
-    fn async_rands_gen<R, W, RNG>(
+    fn rands_gen<R, W, RNG>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
@@ -329,8 +202,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
     where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
         RNG: RngCore + CryptoRng,
     {
         let start_time = timer_start!(|| "Client pairwise randomness generation");
@@ -378,7 +251,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                         let (seal_state, ct) = self.backend.rands_preprocess(rands_batch);
                         // Push ciphertexts and state to channel
                         task::block_on(async { send.send((batch_idx, seal_state, ct)).await });
-                        // Simulate ZK proof time
+                        // TODO Simulate ZK proof time
                         if i % 6 == 0 {
                             // Proving time
                             std::thread::sleep(std::time::Duration::from_millis(385));
@@ -433,11 +306,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     while let Some((batch_idx, mut seal_state, ct)) = recv_1.next().await {
                         let msg = (batch_idx, ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
-                            .await
-                            .unwrap();
+                        bytes::async_serialize(&mut *writer, &send_message).await.unwrap();
                         self.backend.rands_free_ct(&mut seal_state);
-                        writer.flush().await;
                         let mut states = states.write().await;
                         states[batch_idx] = Some(seal_state);
                     }
@@ -451,10 +321,10 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     for _ in 0..batches {
                         // Receive ciphertexts from the server
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (i, mut r_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (_, mut r_mac_ct) = recv_message.msg();
                         // Push ciphertexts to channel to be processed by a thread
                         send.send((i, r_ct, r_mac_ct)).await;
@@ -472,163 +342,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
         Arc::try_unwrap(result).unwrap().into_inner().unwrap()
     }
 
-    fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<Triple<Fp64<P>>> {
-        let start_time = timer_start!(|| "Client triples generation");
-        let mut a_rands = Vec::with_capacity(num);
-        let mut b_rands = Vec::with_capacity(num);
-        for _ in 0..num {
-            a_rands.push(Fp64::<P>::uniform(rng).into_repr().0);
-            b_rands.push(Fp64::<P>::uniform(rng).into_repr().0);
-        }
-        // Process and send the shares in batches
-        let batches = (num as f64 / Self::BATCH_SIZE as f64).ceil() as usize;
-        let n_threads = min(rayon::current_num_threads(), batches);
-        let batches_per_thread = (batches as f64 / n_threads as f64).ceil() as usize;
-
-        // Wrap writer in a Mutex for use in multiple threads.
-        let writer_mutex = Mutex::new(writer);
-        // Store the SEAL state needed for each batch
-        let states_mutex = Mutex::new(vec![None; batches]);
-        let mut result = vec![
-            Triple {
-                a: AuthAdditiveShare::zero(),
-                b: AuthAdditiveShare::zero(),
-                c: AuthAdditiveShare::zero(),
-            };
-            num
-        ];
-        // We use rayon scoping so that all threads are executed in the threadpool
-        rayon::scope(|s| {
-            // TODO
-            let pre_time = timer_start!(|| "Preprocessing");
-            // We don't use par_iter here because we want to asynchronously send and receive
-            // batches
-            for thread_idx in 0..n_threads {
-                // TODO
-                let batches = if thread_idx == n_threads - 1 && batches % batches_per_thread != 0 {
-                    batches % batches_per_thread
-                } else {
-                    batches_per_thread
-                };
-                let thread_range = Self::BATCH_SIZE * (thread_idx * batches_per_thread)
-                    ..min(
-                        Self::BATCH_SIZE * (thread_idx * batches_per_thread + batches),
-                        num,
-                    );
-                // Create local references that the closure can borrow
-                let a_batch = &a_rands[thread_range.clone()];
-                let b_batch = &b_rands[thread_range.clone()];
-                let states_mutex = &states_mutex;
-                let writer_mutex = &writer_mutex;
-                s.spawn(move |_| {
-                    for i in 0..batches {
-                        let batch_range =
-                            Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), a_batch.len());
-                        let batch_idx = thread_idx * batches_per_thread + i;
-                        let (mut seal_state, a_ct, b_ct) = self.backend.triples_preprocess(
-                            &a_batch[batch_range.clone()],
-                            &b_batch[batch_range.clone()],
-                        );
-                        // Send input to server
-                        let mut writer = writer_mutex.lock().unwrap();
-                        let msg = (batch_idx, a_ct);
-                        let send_message = MsgSend::new(&msg);
-                        crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                        let msg = (batch_idx, b_ct);
-                        let send_message = MsgSend::new(&msg);
-                        crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                        // Store SEAL state
-                        self.backend.triples_free_ct(&mut seal_state);
-                        let mut states = states_mutex.lock().unwrap();
-                        states[batch_idx] = Some(seal_state);
-                        if i % 6 == 0 {
-                            // Proving time
-                            std::thread::sleep(std::time::Duration::from_millis(385));
-                            // Sending time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                        }
-                    }
-                });
-            }
-            // Flush the writer - we don't need to return the lock since we don't write
-            // again
-            writer_mutex.lock().unwrap().flush().unwrap();
-            timer_end!(pre_time);
-
-            let recv_time = timer_start!(|| "Receiving result");
-            for _ in 0..batches {
-                // Receive ciphertexts from the server
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (i, mut a_ct) = recv_message.msg();
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (_, mut b_ct) = recv_message.msg();
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (_, mut c_ct) = recv_message.msg();
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (_, mut a_mac_ct) = recv_message.msg();
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (_, mut b_mac_ct) = recv_message.msg();
-                let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                let (j, mut c_mac_ct) = recv_message.msg();
-                assert_eq!(i, j);
-                // This is guaranteed to be Some(..) since we only receive `i`
-                // that the server has finished processing (and thus received)
-                let mut seal_state = states_mutex.lock().unwrap()[i].unwrap();
-                let (a_share, b_share, c_share, a_mac_share, b_mac_share, c_mac_share) =
-                    self.backend.triples_postprocess(
-                        &mut seal_state,
-                        a_ct.as_mut_slice(),
-                        b_ct.as_mut_slice(),
-                        c_ct.as_mut_slice(),
-                        a_mac_ct.as_mut_slice(),
-                        b_mac_ct.as_mut_slice(),
-                        c_mac_ct.as_mut_slice(),
-                    );
-                // Map to Triples and insert into `result`
-                let recv_triples = izip!(
-                    a_share,
-                    b_share,
-                    c_share,
-                    a_mac_share,
-                    b_mac_share,
-                    c_mac_share
-                )
-                .map(|(a, b, c, a_m, b_m, c_m)| Triple {
-                    a: AuthAdditiveShare::new(
-                        Fp64::from_repr(a.into()),
-                        Fp64::from_repr(a_m.into()),
-                    ),
-                    b: AuthAdditiveShare::new(
-                        Fp64::from_repr(b.into()),
-                        Fp64::from_repr(b_m.into()),
-                    ),
-                    c: AuthAdditiveShare::new(
-                        Fp64::from_repr(c.into()),
-                        Fp64::from_repr(c_m.into()),
-                    ),
-                })
-                .collect::<Vec<_>>();
-                for (old, new) in izip!(
-                    (*result)[Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), num)]
-                        .iter_mut(),
-                    recv_triples.iter()
-                ) {
-                    *old = *new;
-                }
-            }
-            timer_end!(recv_time);
-        });
-        timer_end!(start_time);
-        result
-    }
-
-    fn async_triples_gen<R, W, RNG>(
+    fn triples_gen<R, W, RNG>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
@@ -636,8 +350,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
         num: usize,
     ) -> Vec<Triple<Fp64<P>>>
     where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
         RNG: RngCore + CryptoRng,
     {
         let start_time = timer_start!(|| "Client triples generation");
@@ -701,7 +415,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                         task::block_on(async {
                             send.send((batch_idx, seal_state, a_ct, b_ct)).await
                         });
-                        // Simulate ZK proof time
+                        // TODO Simulate ZK proof time
                         if i % 6 == 0 {
                             // Proving time
                             std::thread::sleep(std::time::Duration::from_millis(385));
@@ -793,16 +507,11 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     while let Some((batch_idx, mut seal_state, a_ct, b_ct)) = recv_1.next().await {
                         let msg = (batch_idx, a_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
-                            .await
-                            .unwrap();
+                        bytes::async_serialize(&mut *writer, &send_message).await.unwrap();
                         let msg = (batch_idx, b_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
-                            .await
-                            .unwrap();
+                        bytes::async_serialize(&mut *writer, &send_message).await.unwrap();
                         self.backend.triples_free_ct(&mut seal_state);
-                        writer.flush().await;
                         let mut states = states.write().await;
                         states[batch_idx] = Some(seal_state);
                     }
@@ -816,22 +525,22 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     for _ in 0..batches {
                         // Receive ciphertexts from the server
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (i, mut a_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (_, mut b_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (_, mut c_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (_, mut a_mac_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (_, mut b_mac_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (_, mut c_mac_ct) = recv_message.msg();
                         // Push ciphertexts to channel to be processed by a thread
                         send.send((i, a_ct, b_ct, c_ct, a_mac_ct, b_mac_ct, c_mac_ct))
@@ -851,121 +560,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
 }
 
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
-    fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
-        let start_time = timer_start!(|| "Server pairwise randomness generation");
-        let pre_time = timer_start!(|| "Preprocessing");
-
-        let batches = (num as f64 / Self::BATCH_SIZE as f64).ceil() as usize;
-        let n_threads = min(rayon::current_num_threads(), batches);
-        let batches_per_thread = (batches as f64 / n_threads as f64).ceil() as usize;
-
-        let mut rands = Vec::with_capacity(num);
-        let mut shares = Vec::with_capacity(num);
-        let mut mac_shares = Vec::with_capacity(num);
-        for _ in 0..num {
-            rands.push(Fp64::<P>::uniform(rng).into_repr().0);
-            shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-            mac_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-        }
-
-        // TODO: Test bounded
-        let (tx_inp, rx_inp): (
-            Vec<flume::Sender<Vec<c_char>>>,
-            Vec<flume::Receiver<Vec<c_char>>>,
-        ) = (0..n_threads).map(|_| flume::unbounded()).unzip();
-        let (tx_out, rx_out) = flume::unbounded();
-
-        // TODO: Maybe try doing preprocessing outside thread
-        rayon::scope(|s| {
-            for thread_idx in 0..n_threads {
-                // TODO
-                let batches = if thread_idx == n_threads - 1 && batches % batches_per_thread != 0 {
-                    batches % batches_per_thread
-                } else {
-                    batches_per_thread
-                };
-                let thread_range = Self::BATCH_SIZE * (thread_idx * batches_per_thread)
-                    ..min(
-                        Self::BATCH_SIZE * (thread_idx * batches_per_thread + batches),
-                        num,
-                    );
-                // Create local references that thread can move
-                let rands = &rands[thread_range.clone()];
-                let shares = &shares[thread_range.clone()];
-                let mac_shares = &mac_shares[thread_range.clone()];
-                let rx = &rx_inp[thread_idx];
-                let tx = tx_out.clone();
-                // TODO: Spawn function here
-                s.spawn(move |_| {
-                    for i in 0..batches {
-                        let batch_range =
-                            Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), rands.len());
-                        let mut seal_state = self.backend.rands_preprocess(
-                            &rands[batch_range.clone()],
-                            &shares[batch_range.clone()],
-                            &mac_shares[batch_range],
-                        );
-                        let mut ct = rx.recv().unwrap();
-                        tx.send((
-                            thread_idx * batches_per_thread + i,
-                            self.backend
-                                .rands_online(&mut seal_state, ct.as_mut_slice()),
-                        ))
-                        .unwrap();
-
-                        if i % 6 == 0 {
-                            // Receiving time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            // Verifying time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                        }
-                    }
-                });
-            }
-            // TODO
-            crossbeam::scope(|s| {
-                // Spawn an extra thread here which will simply receive client requests
-                s.spawn(|_| {
-                    let recv_time = timer_start!(|| "Receiving client input");
-                    for _ in 0..batches {
-                        // Receive input from client
-                        let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                        let (i, ct) = recv_message.msg();
-                        // Send input over appropriate channel
-                        let thread_num = min(i / batches_per_thread, n_threads - 1);
-                        tx_inp[thread_num].send(ct).unwrap();
-                    }
-                    timer_end!(recv_time);
-                });
-                for _ in 0..batches {
-                    let (i, (r_share_ct, r_mac_share_ct)) = rx_out.recv().unwrap();
-                    // Send result to client
-                    let msg = (i, r_share_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                    let msg = (i, r_mac_share_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                }
-            })
-            .unwrap();
-        });
-        let rands = izip!(shares, mac_shares)
-            .map(|(v, m)| {
-                AuthAdditiveShare::new(Fp64::from_repr(v.into()), Fp64::from_repr(m.into()))
-            })
-            .collect();
-        timer_end!(start_time);
-        rands
-    }
-
-    fn async_rands_gen<R, W, RNG>(
+    fn rands_gen<R, W, RNG>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
@@ -973,8 +568,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
     where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
+        R: Read + Send + Unpin,
+        W: Write + Send+ Unpin,
         RNG: RngCore + CryptoRng,
     {
         let start_time = timer_start!(|| "Server pairwise randomness generation");
@@ -1046,7 +641,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                             .await
                             .unwrap();
                         });
-                        // Simulate ZK-proof time
+                        // TODO Simulate ZK-proof time
                         if i % 6 == 0 {
                             // Receiving time
                             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1067,7 +662,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                     for _ in 0..batches {
                         // Receive input from client
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (i, ct) = recv_message.msg();
                         // Send input over appropriate channel
                         tx_inp[i / batches_per_thread].send(ct).await.unwrap();
@@ -1080,15 +675,14 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                         // Send result to client
                         let msg = (i, r_share_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         let msg = (i, r_mac_share_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
-                        writer.flush().await.unwrap();
                     }
                 };
                 futures::future::join(recv_future, send_future).await;
@@ -1100,184 +694,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
         result
     }
 
-    fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<Triple<Fp64<P>>> {
-        let start_time = timer_start!(|| "Server triples generation");
-
-        let batches = (num as f64 / Self::BATCH_SIZE as f64).ceil() as usize;
-        let n_threads = min(rayon::current_num_threads(), batches);
-        let batches_per_thread = (batches as f64 / n_threads as f64).ceil() as usize;
-
-        // TODO
-        let rand_time = timer_start!(|| "Generating shares");
-        let mut a_rands = Vec::with_capacity(num);
-        let mut b_rands = Vec::with_capacity(num);
-        let mut c_rands = Vec::with_capacity(num);
-        let mut a_shares = Vec::with_capacity(num);
-        let mut b_shares = Vec::with_capacity(num);
-        let mut c_shares = Vec::with_capacity(num);
-        let mut a_mac_shares = Vec::with_capacity(num);
-        let mut b_mac_shares = Vec::with_capacity(num);
-        let mut c_mac_shares = Vec::with_capacity(num);
-        for _ in 0..num {
-            let a_rand = Fp64::<P>::uniform(rng);
-            let b_rand = Fp64::<P>::uniform(rng);
-            let c_rand = a_rand * b_rand;
-            a_rands.push(a_rand.into_repr().0);
-            b_rands.push(b_rand.into_repr().0);
-            c_rands.push(c_rand.into_repr().0);
-            a_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-            b_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-            c_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-            a_mac_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-            b_mac_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-            c_mac_shares.push(Fp64::<P>::uniform(rng).into_repr().0);
-        }
-        timer_end!(rand_time);
-
-        // TODO: Test bounded
-        let (tx_inp, rx_inp): (
-            Vec<flume::Sender<Vec<c_char>>>,
-            Vec<flume::Receiver<Vec<c_char>>>,
-        ) = (0..n_threads).map(|_| flume::unbounded()).unzip();
-        let (tx_out, rx_out) = flume::unbounded();
-
-        // TODO: Maybe try doing preprocessing outside thread
-        rayon::scope(|s| {
-            for thread_idx in 0..n_threads {
-                // TODO
-                let batches = if thread_idx == n_threads - 1 && batches % batches_per_thread != 0 {
-                    batches % batches_per_thread
-                } else {
-                    batches_per_thread
-                };
-                let thread_range = Self::BATCH_SIZE * (thread_idx * batches_per_thread)
-                    ..min(
-                        Self::BATCH_SIZE * (thread_idx * batches_per_thread + batches),
-                        num,
-                    );
-                // Create local references that thread can move
-                let a_rands = &a_rands[thread_range.clone()];
-                let b_rands = &b_rands[thread_range.clone()];
-                let c_rands = &c_rands[thread_range.clone()];
-                let a_shares = &a_shares[thread_range.clone()];
-                let b_shares = &b_shares[thread_range.clone()];
-                let c_shares = &c_shares[thread_range.clone()];
-                let a_mac_shares = &a_mac_shares[thread_range.clone()];
-                let b_mac_shares = &b_mac_shares[thread_range.clone()];
-                let c_mac_shares = &c_mac_shares[thread_range.clone()];
-                let rx = &rx_inp[thread_idx];
-                let tx = tx_out.clone();
-                // TODO: Spawn function here
-                s.spawn(move |_| {
-                    for i in 0..batches {
-                        let batch_range =
-                            Self::BATCH_SIZE * i..min(Self::BATCH_SIZE * (i + 1), a_rands.len());
-                        // TODO: Move this
-                        let mut seal_state = self.backend.triples_preprocess(
-                            &a_rands[batch_range.clone()],
-                            &b_rands[batch_range.clone()],
-                            &c_rands[batch_range.clone()],
-                            &a_shares[batch_range.clone()],
-                            &b_shares[batch_range.clone()],
-                            &c_shares[batch_range.clone()],
-                            &a_mac_shares[batch_range.clone()],
-                            &b_mac_shares[batch_range.clone()],
-                            &c_mac_shares[batch_range.clone()],
-                        );
-                        let mut a_rands_ct = rx.recv().unwrap();
-                        let mut b_rands_ct = rx.recv().unwrap();
-
-                        tx.send((
-                            thread_idx * batches_per_thread + i,
-                            self.backend.triples_online(
-                                &mut seal_state,
-                                a_rands_ct.as_mut_slice(),
-                                b_rands_ct.as_mut_slice(),
-                            ),
-                        ))
-                        .unwrap();
-
-                        if i % 6 == 0 {
-                            // Receiving time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            // Verifying time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                        }
-                    }
-                })
-            }
-
-            // TODO
-            crossbeam::scope(|s| {
-                // Spawn an extra thread here which will simply receive client requests
-                s.spawn(|_| {
-                    let recv_time = timer_start!(|| "Receiving client input");
-                    for _ in 0..batches {
-                        // Receive input from client
-                        let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                        let (i, a_rands_ct) = recv_message.msg();
-                        let recv_message: MsgRcv = crate::bytes::deserialize(&mut *reader).unwrap();
-                        let (j, b_rands_ct) = recv_message.msg();
-                        assert_eq!(i, j);
-                        // Send input over appropriate channel
-                        let thread_num = min(i / batches_per_thread, n_threads - 1);
-                        tx_inp[thread_num].send(a_rands_ct).unwrap();
-                        tx_inp[thread_num].send(b_rands_ct).unwrap();
-                    }
-                    timer_end!(recv_time);
-                });
-                for _ in 0..batches {
-                    let (i, (a_ct, b_ct, c_ct, a_mac_ct, b_mac_ct, c_mac_ct)) =
-                        rx_out.recv().unwrap();
-                    // Send result to client
-                    let msg = (i, a_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                    let msg = (i, b_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                    let msg = (i, c_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                    let msg = (i, a_mac_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                    let msg = (i, b_mac_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                    let msg = (i, c_mac_ct);
-                    let send_message = MsgSend::new(&msg);
-                    crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-                }
-            })
-            .unwrap();
-        });
-
-        let triples = izip!(
-            a_shares,
-            b_shares,
-            c_shares,
-            a_mac_shares,
-            b_mac_shares,
-            c_mac_shares
-        )
-        .map(|(a, b, c, a_m, b_m, c_m)| Triple {
-            a: AuthAdditiveShare::new(Fp64::from_repr(a.into()), Fp64::from_repr(a_m.into())),
-            b: AuthAdditiveShare::new(Fp64::from_repr(b.into()), Fp64::from_repr(b_m.into())),
-            c: AuthAdditiveShare::new(Fp64::from_repr(c.into()), Fp64::from_repr(c_m.into())),
-        })
-        .collect();
-        timer_end!(start_time);
-        triples
-    }
-
-    fn async_triples_gen<R, W, RNG>(
+    fn triples_gen<R, W, RNG>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
@@ -1285,8 +702,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
         num: usize,
     ) -> Vec<Triple<Fp64<P>>>
     where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
         RNG: RngCore + CryptoRng,
     {
         let start_time = timer_start!(|| "Server triples generation");
@@ -1426,7 +843,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                             .await
                             .unwrap();
                         });
-                        // Simulate ZK-proof time
+                        // TODO Simulate ZK-proof time
                         if i % 6 == 0 {
                             // Receiving time
                             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1447,10 +864,10 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                     for _ in 0..batches {
                         // Receive input from client
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (i, a_rands_ct) = recv_message.msg();
                         let recv_message: MsgRcv =
-                            crate::bytes::async_deserialize(&mut *reader).await.unwrap();
+                            bytes::async_deserialize(&mut *reader).await.unwrap();
                         let (j, b_rands_ct) = recv_message.msg();
                         assert_eq!(i, j);
                         // Send input over appropriate channel
@@ -1470,32 +887,32 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                         // Send result to client
                         let msg = (i, a_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         let msg = (i, b_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         let msg = (i, c_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         let msg = (i, a_mac_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         let msg = (i, b_mac_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         let msg = (i, c_mac_ct);
                         let send_message = MsgSend::new(&msg);
-                        crate::bytes::async_serialize(&mut *writer, &send_message)
+                        bytes::async_serialize(&mut *writer, &send_message)
                             .await
                             .unwrap();
                         writer.flush().await.unwrap();
@@ -1548,74 +965,44 @@ impl<'a, P: Fp64Parameters> InsecureServerOfflineMPC<Fp64<P>, SealServerGen<'a>>
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
     for InsecureClientOfflineMPC<Fp64<P>, SealClientGen<'_>>
 {
-    fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+    fn rands_gen<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
         let start_time = timer_start!(|| "Insecure Client pairwise randomness generation");
         let recv_message: InsecureRandsRcv<Fp64<_>> =
-            crate::bytes::deserialize(&mut *reader).unwrap();
+            bytes::deserialize(&mut *reader).unwrap();
         let result = recv_message.msg();
         timer_end!(start_time);
         result
     }
 
-    fn async_rands_gen<R, W, RNG>(
+    fn triples_gen<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<AuthAdditiveShare<Fp64<P>>>
-    where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng,
-    {
-        unimplemented!()
-    }
-
-    fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
         let start_time = timer_start!(|| "Insecure Client triples generation");
         let recv_message: InsecureTriplesRcv<Fp64<_>> =
-            crate::bytes::deserialize(&mut *reader).unwrap();
+            bytes::deserialize(&mut *reader).unwrap();
         let result = recv_message.msg();
         timer_end!(start_time);
         result
-    }
-
-    fn async_triples_gen<R, W, RNG>(
-        &self,
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<Triple<Fp64<P>>>
-    where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng,
-    {
-        unimplemented!();
     }
 }
 
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
     for InsecureServerOfflineMPC<Fp64<P>, SealServerGen<'_>>
 {
-    fn rands_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
+    fn rands_gen<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
+        reader: &mut IMuxAsync<R>,
+        writer: &mut IMuxAsync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
@@ -1632,31 +1019,15 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
         }
 
         let send_message = InsecureRandsSend::new(&client_rands);
-        crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-        writer.flush().unwrap();
+        bytes::serialize(&mut *writer, &send_message).unwrap();
         timer_end!(start_time);
         server_rands
     }
 
-    fn async_rands_gen<R, W, RNG>(
+    fn triples_gen<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &self,
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<AuthAdditiveShare<Fp64<P>>>
-    where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng,
-    {
-        unimplemented!()
-    }
-
-    fn triples_gen<R: Read + Send, W: Write + Send, RNG: RngCore + CryptoRng>(
-        &self,
-        reader: &mut IMuxSync<R>,
-        writer: &mut IMuxSync<W>,
         rng: &mut RNG,
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
@@ -1678,25 +1049,9 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
         }
 
         let send_message = InsecureTriplesSend::new(&client_triples);
-        crate::bytes::serialize(&mut *writer, &send_message).unwrap();
-        writer.flush().unwrap();
+        bytes::serialize(&mut *writer, &send_message).unwrap();
         timer_end!(start_time);
         server_triples
-    }
-
-    fn async_triples_gen<R, W, RNG>(
-        &self,
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
-        rng: &mut RNG,
-        num: usize,
-    ) -> Vec<Triple<Fp64<P>>>
-    where
-        R: async_std::io::Read + Send + Unpin,
-        W: async_std::io::Write + Send + Unpin,
-        RNG: RngCore + CryptoRng,
-    {
-        unimplemented!();
     }
 }
 
@@ -1705,11 +1060,12 @@ mod tests {
     use super::*;
     use crate::{ClientKeySend, ServerKeyRcv};
     use algebra::{fields::near_mersenne_64::F, PrimeField, UniformRandom};
+    use io_utils::IMuxAsync;
     use protocols_sys::KeyShare;
     use rand::SeedableRng;
     use rand_chacha::ChaChaRng;
     use rayon::prelude::*;
-    use std::{
+    use async_std::{
         io::{BufReader, BufWriter, Read, Write},
         net::{TcpListener, TcpStream},
     };
@@ -1720,27 +1076,32 @@ mod tests {
         0x52, 0xd2,
     ];
 
-    fn get_connection(server_addr: &str) -> ((impl Read, impl Write), (impl Read, impl Write)) {
+    fn get_connection(server_addr: &str) -> ((IMuxAsync<impl Read>, IMuxAsync<impl Write>), (IMuxAsync<impl Read>, IMuxAsync<impl Write>)) {
         crossbeam::thread::scope(|s| {
             let server_io = s.spawn(|_| {
-                let server_listener = TcpListener::bind(server_addr).unwrap();
-                let stream = server_listener
-                    .incoming()
-                    .next()
-                    .unwrap()
-                    .expect("Server connection failed!");
-                let read_stream = BufReader::new(stream.try_clone().unwrap());
-                let write_stream = BufWriter::new(stream);
-                (read_stream, write_stream)
+                task::block_on(async {
+                    let server_listener = TcpListener::bind(server_addr).await.unwrap();
+                    let stream = server_listener
+                        .incoming()
+                        .next()
+                        .await
+                        .unwrap()
+                        .expect("Server connection failed!");
+                    let read_stream = IMuxAsync::new(vec![BufReader::new(stream.clone())]);
+                    let write_stream = IMuxAsync::new(vec![BufWriter::new(stream)]);
+                    (read_stream, write_stream)
+                })
             });
             // Sometimes the client thread will start too soon and connection fails so put a
             // small delay
             std::thread::sleep(std::time::Duration::from_millis(10));
             let client_io = s.spawn(|_| {
-                let stream = TcpStream::connect(server_addr).expect("Client connection failed!");
-                let read_stream = BufReader::new(stream.try_clone().unwrap());
-                let write_stream = BufWriter::new(stream);
-                (read_stream, write_stream)
+                task::block_on(async {
+                    let stream = TcpStream::connect(server_addr).await.expect("Client connection failed!");
+                    let read_stream = IMuxAsync::new(vec![BufReader::new(stream.clone())]);
+                    let write_stream = IMuxAsync::new(vec![BufWriter::new(stream)]);
+                    (read_stream, write_stream)
+                })
             });
             (client_io.join().unwrap(), server_io.join().unwrap())
         })
@@ -1762,17 +1123,23 @@ mod tests {
                 let mac_key = F::uniform(&mut rng);
                 let key_recv = timer_start!(|| "Receiving Keys");
                 let recv_message: ServerKeyRcv =
-                    crate::bytes::deserialize(&mut server_read).unwrap();
+                    bytes::deserialize(&mut server_read).unwrap();
                 let mut key_share = KeyShare::new();
                 let sfhe = key_share.receive(recv_message.msg());
                 timer_end!(key_recv);
 
                 // Generate rands
                 let server_gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
-                (
-                    server_gen.rands_gen(&mut server_read, &mut server_write, &mut rng, num),
-                    mac_key,
-                )
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(rayon::current_num_threads()/2)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    (
+                        server_gen.rands_gen(&mut server_read, &mut server_write, &mut rng, num),
+                        mac_key,
+                    )
+                })
             });
 
             let client_rands = s.spawn(|_| {
@@ -1785,12 +1152,18 @@ mod tests {
 
                 let key_send = timer_start!(|| "Sending Keys");
                 let send_message = ClientKeySend::new(&keys_vec);
-                crate::bytes::serialize(&mut client_write, &send_message).unwrap();
+                bytes::serialize(&mut client_write, &send_message).unwrap();
                 timer_end!(key_send);
 
                 // Generate rands
                 let client_gen = ClientOfflineMPC::<F, _>::new(&cfhe);
-                client_gen.rands_gen(&mut client_read, &mut client_write, &mut rng, num)
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(rayon::current_num_threads()/2)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    client_gen.rands_gen(&mut client_read, &mut client_write, &mut rng, num)
+                })
             });
             (client_rands.join().unwrap(), server_result.join().unwrap())
         })
@@ -1815,7 +1188,7 @@ mod tests {
                 let mac_key = F::uniform(&mut rng);
                 let key_recv = timer_start!(|| "Receiving Keys");
                 let recv_message: ServerKeyRcv =
-                    crate::bytes::deserialize(&mut server_read).unwrap();
+                    bytes::deserialize(&mut server_read).unwrap();
                 let mut key_share = KeyShare::new();
                 let sfhe = key_share.receive(recv_message.msg());
                 timer_end!(key_recv);
@@ -1823,7 +1196,7 @@ mod tests {
                 // Generate triples
                 let server_gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(4)
+                    .num_threads(rayon::current_num_threads()/2)
                     .build()
                     .unwrap();
                 pool.install(|| {
@@ -1844,13 +1217,13 @@ mod tests {
 
                 let key_send = timer_start!(|| "Sending Keys");
                 let send_message = ClientKeySend::new(&keys_vec);
-                crate::bytes::serialize(&mut client_write, &send_message).unwrap();
+                bytes::serialize(&mut client_write, &send_message).unwrap();
                 timer_end!(key_send);
 
                 // Generate triples
                 let client_gen = ClientOfflineMPC::<F, _>::new(&cfhe);
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(4)
+                    .num_threads(rayon::current_num_threads()/2)
                     .build()
                     .unwrap();
                 pool.install(|| {
