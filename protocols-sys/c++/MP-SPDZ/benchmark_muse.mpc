@@ -1,0 +1,67 @@
+import ml
+import util
+import math
+
+program.options_from_args()
+program.options.cisc = True
+
+try:
+    n_threads = int(program.args[2])
+except:
+    n_threads = None
+
+ml.Layer.n_threads = n_threads
+ml.FixConv2d.use_conv2ds = True
+
+if 'full' in program.args:
+    sfix.set_precision(12, 63)
+else:
+    sfix.set_precision(12, 31)
+
+
+if program.args[1] == 'A':
+    layers = [
+        ml.FixConv2d([1, 28, 28, 1], (16, 5, 5, 1), (16,), [1, 24, 24, 16], (1, 1), padding='VALID'),
+        ml.Relu([1, 24, 24, 16]),
+        ml.FixAveragePool2d([1, 24, 24, 16], [1, 12, 12, 16], (2, 2), (2, 2)),
+        ml.FixConv2d([1, 12, 12, 16], (16, 5, 5, 16), (16,), [1, 8, 8, 16], (1, 1), padding='VALID'),
+        ml.Relu([1, 8, 8, 16]),
+        ml.FixAveragePool2d([1, 8, 8, 16], [1, 4, 4, 16], (2, 2), (2, 2)),
+        ml.Dense(1, 256, 100),
+        ml.Relu([1, 100]),
+        ml.Dense(1, 100, 10),
+        ml.Argmax((1, 10)),
+    ]
+elif program.args[1] == 'B':
+    layers = [
+        ml.FixConv2d([1, 32, 32, 3], (64, 3, 3, 3), (64,), [1, 32, 32, 64], (1, 1)),
+        ml.Relu([1, 32, 32, 64]),
+        ml.FixConv2d([1, 32, 32, 64], (64, 3, 3, 64), (64,), [1, 32, 32, 64], (1, 1)),
+        ml.Relu([1, 32, 32, 64]),
+        ml.FixAveragePool2d([1, 32, 32, 64], [1, 16, 16, 64], (2, 2), (2, 2)),
+        ml.FixConv2d([1, 16, 16, 64], (64, 3, 3, 64), (64,), [1, 16, 16, 64], (1, 1)),
+        ml.Relu([1, 16, 16, 64]),
+        ml.FixConv2d([1, 16, 16, 64], (64, 3, 3, 64), (64,), [1, 16, 16, 64], (1, 1)),
+        ml.Relu([1, 16, 16, 64]),
+        ml.FixAveragePool2d([1, 16, 16, 64], [1, 8, 8, 64], (2, 2), (2, 2)),
+        ml.FixConv2d([1, 8, 8, 64], (64, 3, 3, 64), (64,), [1, 8, 8, 64], (1, 1)),
+        ml.Relu([1, 8, 8, 64]),
+        ml.FixConv2d([1, 8, 8, 64], (64, 1, 1, 64), (64,), [1, 8, 8, 64], (1, 1), padding='VALID'),
+        ml.Relu([1, 8, 8, 64]),
+        ml.FixConv2d([1, 8, 8, 64], (16, 1, 1, 64), (16,), [1, 8, 8, 16], (1, 1), padding='VALID'),
+        ml.Relu([1, 8, 8, 16]),
+        ml.Dense(1, 1024, 10),
+        ml.Argmax((1, 10)),
+    ]
+else:
+    raise Exception('unknown network: ' + program.args[1])
+
+opt = ml.Optimizer()
+opt.layers = layers
+for layer in layers:
+    layer.input_from(0)
+layers[0].X.input_from(1)
+start_timer(1)
+opt.forward(1)
+stop_timer(1)
+print_ln('guess %s', layers[-1].Y[0].reveal())
