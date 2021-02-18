@@ -379,14 +379,10 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let modulus_bits = <F as PrimeField>::size_in_bits();
     let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
 
-    let out_mac_keys = vec![F::zero(); layers.len()];
-    let out_mac_shares = vec![F::zero(); activations];
-    let inp_mac_keys = vec![F::zero(); layers.len()];
-    let inp_mac_shares = vec![F::zero(); activations];
     let zero_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
     let one_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
 
-    let num_rands = 2 * (activations + activations * modulus_bits);
+    let num_rands = 2 * activations * modulus_bits;
 
     // Generate rands
     let mac_key = F::uniform(rng);
@@ -398,18 +394,6 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     // Share inputs
     let share_time = timer_start!(|| "Server sharing inputs");
-    let out_mac_keys = mpc
-        .private_inputs(&mut reader, &mut writer, out_mac_keys.as_slice(), rng)
-        .unwrap();
-    let inp_mac_keys = mpc
-        .private_inputs(&mut reader, &mut writer, inp_mac_keys.as_slice(), rng)
-        .unwrap();
-    let out_mac_shares = mpc
-        .private_inputs(&mut reader, &mut writer, out_mac_shares.as_slice(), rng)
-        .unwrap();
-    let inp_mac_shares = mpc
-        .private_inputs(&mut reader, &mut writer, inp_mac_shares.as_slice(), rng)
-        .unwrap();
     let zero_labels = mpc
         .private_inputs(&mut reader, &mut writer, zero_labels.as_slice(), rng)
         .unwrap();
@@ -425,12 +409,6 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .unwrap();
     let inp_bits = mpc
         .recv_private_inputs(&mut reader, &mut writer, activations * modulus_bits)
-        .unwrap();
-    let c_out_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
-        .unwrap();
-    let c_inp_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);

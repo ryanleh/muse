@@ -282,12 +282,10 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let modulus_bits = <F as PrimeField>::size_in_bits();
     let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
 
-    let out_mac_shares = vec![F::zero(); activations];
     let out_shares_bits = vec![F::zero(); activations * modulus_bits];
-    let inp_mac_shares = vec![F::zero(); activations];
     let inp_rands_bits = vec![F::zero(); activations * modulus_bits];
 
-    let num_rands = 2 * (activations + activations * modulus_bits);
+    let num_rands = 2 * activations * modulus_bits;
 
     // Generate rands
     let gen = ClientOfflineMPC::new(&cfhe);
@@ -298,18 +296,6 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     // Share inputs
     let share_time = timer_start!(|| "Client receiving inputs");
-    let s_out_mac_keys = mpc
-        .recv_private_inputs(&mut reader, &mut writer, layers.len())
-        .unwrap();
-    let s_inp_mac_keys = mpc
-        .recv_private_inputs(&mut reader, &mut writer, layers.len())
-        .unwrap();
-    let s_out_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
-        .unwrap();
-    let s_inp_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
-        .unwrap();
     let zero_labels = mpc
         .recv_private_inputs(
             &mut reader,
@@ -333,12 +319,6 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .unwrap();
     let inp_bits = mpc
         .private_inputs(&mut reader, &mut writer, inp_rands_bits.as_slice(), rng)
-        .unwrap();
-    let c_out_mac_shares = mpc
-        .private_inputs(&mut reader, &mut writer, out_mac_shares.as_slice(), rng)
-        .unwrap();
-    let c_inp_mac_shares = mpc
-        .private_inputs(&mut reader, &mut writer, inp_mac_shares.as_slice(), rng)
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);

@@ -73,15 +73,13 @@ where
         modulus_bits: usize,
         elems_per_label: usize,
     ) -> (usize, usize) {
-        let rands = 2
-            * (num_layers
-                + 2 * total_size
-                + total_size * modulus_bits
-                + 2 * (modulus_bits * total_size * elems_per_label));
-        let triples = 2
+        let rands = 2 * (
+            modulus_bits * total_size // The inp and out bit shares
+        );
+        let triples = 2 // This is done for both inp and out shares
             * (
                 total_size * modulus_bits   // Check that Client's input is bits
-            + modulus_bits * total_size * elems_per_label
+                + modulus_bits * total_size * elems_per_label
                 // Share GC labels
             );
         (rands, triples)
@@ -240,20 +238,26 @@ where
         let rands = gen.rands_gen(reader, writer, rng, num_rands);
         let triples = gen.triples_gen(reader, writer, rng, num_triples);
         let mut mpc = ServerMPC::new(rands, triples, mac_key);
+        println!("NUM TRIPLES {}", num_triples);
+        println!("NUM RANDS {}", num_rands);
 
         // Share inputs
         // TODO: Trim amount of randomness generated
         let share_time = timer_start!(|| "Server sharing inputs");
         let zero_labels = mpc.private_inputs(reader, writer, zero_labels.as_slice(), rng)?;
+        println!("NUM RANDS {}", mpc.num_rands());
         let one_labels = mpc.private_inputs(reader, writer, one_labels.as_slice(), rng)?;
+        println!("NUM RANDS {}", mpc.num_rands());
         timer_end!(share_time);
 
         // Receive client shares
         let recv_time = timer_start!(|| "Server receiving inputs");
         let out_bits = mpc.recv_private_inputs(reader, writer, total_size * modulus_bits)?;
+        println!("NUM RANDS {}", mpc.num_rands());
         let inp_bits = mpc.recv_private_inputs(reader, writer, total_size * modulus_bits)?;
+        println!("NUM RANDS {}", mpc.num_rands());
         timer_end!(recv_time);
-
+        
         // Check that inputs are bits
         // TODO: Could do some sort of linear combo here if opening is expensive
         let one_minus_out_bits = out_bits
@@ -356,6 +360,8 @@ where
             timer_end!(layer_time);
         }
         timer_end!(cds_time);
+        println!("NUM TRIPLES {}", mpc.num_triples());
+        println!("NUM RANDS {}", mpc.num_rands());
         Ok(())
     }
 
@@ -516,6 +522,8 @@ where
             timer_end!(layer_time);
         }
         timer_end!(cds_time);
+        println!("NUM TRIPLES {}", mpc.num_triples());
+        println!("NUM RANDS {}", mpc.num_rands());
         Ok(labels
             .into_iter()
             .map(|l| Wire::from_block(l, 2))
