@@ -254,9 +254,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                         // TODO Simulate ZK proof time
                         if i % 6 == 0 {
                             // Proving time
-                            std::thread::sleep(std::time::Duration::from_millis(385));
-                            // Sending time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            std::thread::sleep(std::time::Duration::from_millis(266));
                         }
                     }
 
@@ -418,9 +416,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                         // TODO Simulate ZK proof time
                         if i % 6 == 0 {
                             // Proving time
-                            std::thread::sleep(std::time::Duration::from_millis(385));
-                            // Sending time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            std::thread::sleep(std::time::Duration::from_millis(266));
                         }
                     }
 
@@ -643,10 +639,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                         });
                         // TODO Simulate ZK-proof time
                         if i % 6 == 0 {
-                            // Receiving time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
                             // Verifying time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            std::thread::sleep(std::time::Duration::from_millis(73));
                         }
                     }
                 });
@@ -845,10 +839,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
                         });
                         // TODO Simulate ZK-proof time
                         if i % 6 == 0 {
-                            // Receiving time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
                             // Verifying time
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            std::thread::sleep(std::time::Duration::from_millis(73));
                         }
                     }
                 });
