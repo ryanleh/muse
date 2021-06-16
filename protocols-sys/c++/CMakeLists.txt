@@ -20,7 +20,7 @@ FetchContent_Declare(
 )
 option(SEAL_THROW_ON_TRANSPARENT_CIPHERTEXT OFF)
 option(SEAL_USE_ZLIB OFF)
-option(SEAL_USE_ZSTD OFF)
+option(SEAL_USE_ZSTD ON)
 FetchContent_MakeAvailable(seal)
 
 find_package(OpenMP REQUIRED)
