@@ -45,7 +45,7 @@ SerialCT serialize(ostringstream &os) {
     char* serialized = new char[os.tellp()];
     string tmp_str = os.str();
     std::move(tmp_str.begin(), tmp_str.end(), serialized);
-    return SerialCT { serialized, os.tellp() };
+    return SerialCT { serialized, (uint64_t) os.tellp() };
 }
 
 /* Serializes a SEAL ciphertext to a byte array. 
@@ -59,11 +59,11 @@ SerialCT serialize_ct(vector<Ciphertext> ct_vec) {
 
 /* Extracts a vector of Ciphertexts from provided byte stream */
 void recast_opaque(SerialCT &ct, vector<Ciphertext>& destination,
-        shared_ptr<SEALContext>& context) {
+        SEALContext* context) {
     istringstream is;
     is.rdbuf()->pubsetbuf(ct.inner, ct.size);
     for(int ct_idx = 0; ct_idx < destination.size(); ct_idx++) {
-        destination[ct_idx].load(context, is);
+        destination[ct_idx].load(*context, is);
     }
 }
 
@@ -107,7 +107,7 @@ SerialCT encrypt_vec(const ClientFHE* cfhe, const u64* vec, u64 vec_size) {
 /* Deserializes and decrypts a vector */
 u64* decrypt_vec(const ClientFHE* cfhe, SerialCT *ct, u64 size) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(cfhe->context);
+    auto context = static_cast<SEALContext*>(cfhe->context);
 
     // Recast needed fhe helpers
     Decryptor *decryptor = reinterpret_cast<Decryptor*>(cfhe->decryptor);
@@ -117,7 +117,7 @@ u64* decrypt_vec(const ClientFHE* cfhe, SerialCT *ct, u64 size) {
     u64 slot_count = encoder->slot_count();
     u64 vec_size = ceil((float)size / slot_count);
     vector<Ciphertext> ct_vec(vec_size);
-    recast_opaque(*ct, ct_vec, *context);
+    recast_opaque(*ct, ct_vec, context);
     
     // Decrypt ciphertext 
     u64* share = new u64[size];
@@ -137,7 +137,7 @@ u64* decrypt_vec(const ClientFHE* cfhe, SerialCT *ct, u64 size) {
 /* MACs a ciphertext and shares it */
 SerialCT server_mac_ct(const ServerFHE* sfhe, SerialCT *ct, const u64* mac_share, u64 size, u64 mac_key) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
+    auto context = static_cast<SEALContext*>(sfhe->context);
 
     // Recast the needed fhe helpers
     BatchEncoder *encoder = reinterpret_cast<BatchEncoder*>(sfhe->encoder);
@@ -151,7 +151,7 @@ SerialCT server_mac_ct(const ServerFHE* sfhe, SerialCT *ct, const u64* mac_share
 
     // Deserialize ciphertexts
     vector<Ciphertext> ct_vec(shares.size());
-    recast_opaque(*ct, ct_vec, *context);
+    recast_opaque(*ct, ct_vec, context);
 
     // MAC and randomize each ciphertext
     for (int i = 0; i < ct_vec.size(); i++) {
@@ -166,7 +166,7 @@ SerialCT server_mac_ct(const ServerFHE* sfhe, SerialCT *ct, const u64* mac_share
 
 SerialCT client_input_auth(const ServerFHE* sfhe, SerialCT *ct, const uint64_t* shares, const uint64_t* rand, uint64_t size) {
   // Grab shared pointer to SEALContext
-  auto context = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
+  auto context = static_cast<SEALContext*>(sfhe->context);
 
   // Recast the needed fhe helpers
   BatchEncoder *encoder = reinterpret_cast<BatchEncoder*>(sfhe->encoder);
@@ -178,7 +178,7 @@ SerialCT client_input_auth(const ServerFHE* sfhe, SerialCT *ct, const uint64_t* 
 
   // Deserialize ciphertexts
   vector<Ciphertext> ct_vec(1);
-  recast_opaque(*ct, ct_vec, *context);
+  recast_opaque(*ct, ct_vec, context);
 
   vector<Ciphertext> result(1);
   // MAC and randomize each ciphertext
@@ -192,31 +192,38 @@ SerialCT client_input_auth(const ServerFHE* sfhe, SerialCT *ct, const uint64_t* 
 
 ClientFHE client_keygen(SerialCT *key_share) {
     //---------------Param and Key Generation---------------
-    EncryptionParameters parms(scheme_type::BFV);
+    EncryptionParameters parms(scheme_type::bfv);
     parms.set_poly_modulus_degree(POLY_MOD_DEGREE);
     parms.set_coeff_modulus(CoeffModulus::BFVDefault(POLY_MOD_DEGREE));
     parms.set_plain_modulus(PLAINTEXT_MODULUS);
-    auto context = SEALContext::Create(parms);
-    KeyGenerator keygen(context);
-    auto pub_key = keygen.public_key();
+    auto context = new SEALContext(parms);
+    KeyGenerator keygen(*context);
     auto sec_key = keygen.secret_key();
-    auto gal_keys = keygen.galois_keys();
-    auto relin_keys = keygen.relin_keys();
+    // Get serialized versions of the keys
+    auto ser_pub_key = keygen.create_public_key();
+    auto ser_gal_keys = keygen.create_galois_keys();
+    auto ser_relin_keys = keygen.create_relin_keys();
+    // Deserialize the public key since we use it when creating the local
+    // objects
+    PublicKey pub_key;
+    stringstream pub_key_s;
+    ser_pub_key.save(pub_key_s);
+    pub_key.load(*context, pub_key_s);
 
-    BatchEncoder *encoder = new BatchEncoder(context);
-    Encryptor *encryptor = new Encryptor(context, pub_key);
-    Evaluator *evaluator = new Evaluator(context);
-    Decryptor *decryptor = new Decryptor(context, sec_key); 
+    BatchEncoder *encoder = new BatchEncoder(*context);
+    Encryptor *encryptor = new Encryptor(*context, pub_key);
+    Evaluator *evaluator = new Evaluator(*context);
+    Decryptor *decryptor = new Decryptor(*context, sec_key); 
 
-    // Recast the context shared_ptr to void*
-    void* void_context = static_cast<void*>(new shared_ptr<SEALContext>(std::move(context)));
+    // Recast the context to void*
+    void* void_context = static_cast<void*>(context);
 
     // Serialize params and all keys
     ostringstream os;
     parms.save(os);
-    pub_key.save(os);
-    gal_keys.save(os);
-    relin_keys.save(os);
+    ser_pub_key.save(os);
+    ser_gal_keys.save(os);
+    ser_relin_keys.save(os);
     *key_share = serialize(os);
     return ClientFHE { void_context, encoder, encryptor, evaluator, decryptor };
 }
@@ -229,23 +236,23 @@ ServerFHE server_keygen(SerialCT key_share) {
     // Load params
     EncryptionParameters parms;
     parms.load(is);
-    auto context = SEALContext::Create(parms);
+    auto context = new SEALContext(parms);
 
     // Load keys
     PublicKey pub_key;
     GaloisKeys* gal_keys = new GaloisKeys();
     RelinKeys* relin_keys = new RelinKeys();
-    pub_key.load(context, is);
-    (*gal_keys).load(context, is);
-    (*relin_keys).load(context, is);
+    pub_key.load(*context, is);
+    (*gal_keys).load(*context, is);
+    (*relin_keys).load(*context, is);
 
     // Create helpers
-    BatchEncoder *encoder = new BatchEncoder(context);
-    Encryptor *encryptor = new Encryptor(context, pub_key);
-    Evaluator *evaluator = new Evaluator(context);
+    BatchEncoder *encoder = new BatchEncoder(*context);
+    Encryptor *encryptor = new Encryptor(*context, pub_key);
+    Evaluator *evaluator = new Evaluator(*context);
     
-    // Recast the context shared_ptr to void*
-    void* void_context = static_cast<void*>(new shared_ptr<SEALContext>(std::move(context)));
+    // Recast the context to void*
+    void* void_context = static_cast<void*>(context);
     
     // Generate the zero ciphertext
     vector<u64> pod_matrix(encoder->slot_count(), 0ULL);
@@ -591,7 +598,7 @@ ClientTriples client_rand_preprocess(const ClientFHE* cfhe, uint32_t num_rand, c
 void server_conv_online(const ServerFHE* sfhe, const Metadata* data, SerialCT ciphertext,
     char**** masks, ServerShares* shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
+    auto context = static_cast<SEALContext*>(sfhe->context);
 
     // Deserialize ciphertexts
     istringstream is;
@@ -673,7 +680,7 @@ void server_conv_online(const ServerFHE* sfhe, const Metadata* data, SerialCT ci
 void server_fc_online(const ServerFHE* sfhe, const Metadata* data, SerialCT ciphertext,
     char** matrix, ServerShares* shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
+    auto context = static_cast<SEALContext*>(sfhe->context);
 
     // Deserialize ciphertext
     istringstream is;
@@ -723,7 +730,7 @@ void server_fc_online(const ServerFHE* sfhe, const Metadata* data, SerialCT ciph
 
 void server_triples_online(const ServerFHE* sfhe, SerialCT client_a, SerialCT client_b, ServerTriples* shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
+    auto context = static_cast<SEALContext*>(sfhe->context);
 
     // Recast needed fhe helpers
     Evaluator *evaluator = reinterpret_cast<Evaluator*>(sfhe->evaluator);
@@ -732,8 +739,8 @@ void server_triples_online(const ServerFHE* sfhe, SerialCT client_a, SerialCT cl
     // Recast client ciphertexts
     vector<Ciphertext> client_a_ct(shares->vec_len);
     vector<Ciphertext> client_b_ct(shares->vec_len);
-    recast_opaque(client_a, client_a_ct, *context);
-    recast_opaque(client_b, client_b_ct, *context);
+    recast_opaque(client_a, client_a_ct, context);
+    recast_opaque(client_b, client_b_ct, context);
 
     // Recast opaque pointers
     Plaintext *mac_key = reinterpret_cast<Plaintext*>(shares->mac_key);
@@ -806,7 +813,7 @@ void server_triples_online(const ServerFHE* sfhe, SerialCT client_a, SerialCT cl
 
 void server_rand_online(const ServerFHE* sfhe, SerialCT client_r, ServerTriples* shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
+    auto context = static_cast<SEALContext*>(sfhe->context);
 
     // Recast needed fhe helpers
     Evaluator *evaluator = reinterpret_cast<Evaluator*>(sfhe->evaluator);
@@ -814,7 +821,7 @@ void server_rand_online(const ServerFHE* sfhe, SerialCT client_r, ServerTriples*
 
     // Recast client ciphertexts
     vector<Ciphertext> client_r_ct(shares->vec_len);
-    recast_opaque(client_r, client_r_ct, *context);
+    recast_opaque(client_r, client_r_ct, context);
 
     // Recast opaque pointers
     Plaintext *mac_key = reinterpret_cast<Plaintext*>(shares->mac_key);
@@ -848,7 +855,7 @@ void server_rand_online(const ServerFHE* sfhe, SerialCT client_r, ServerTriples*
 
 void client_conv_decrypt(const ClientFHE *cfhe, const Metadata *data, ClientShares *shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(cfhe->context);
+    auto context = static_cast<SEALContext*>(cfhe->context);
 
     // Recast needed fhe helpers
     Decryptor *decryptor = reinterpret_cast<Decryptor*>(cfhe->decryptor);
@@ -856,21 +863,21 @@ void client_conv_decrypt(const ClientFHE *cfhe, const Metadata *data, ClientShar
 
     // Recast bytearrays to vectors of Ciphertexts and decrypt
     vector<Ciphertext> linear_ct(data->out_ct);
-    recast_opaque(shares->linear_ct, linear_ct, *context);
+    recast_opaque(shares->linear_ct, linear_ct, context);
     shares->linear = HE_decrypt(linear_ct, *data, *decryptor, *encoder);
     
     vector<Ciphertext> linear_mac_ct(data->out_ct);
-    recast_opaque(shares->linear_mac_ct, linear_mac_ct, *context);
+    recast_opaque(shares->linear_mac_ct, linear_mac_ct, context);
     shares->linear_mac = HE_decrypt(linear_mac_ct, *data, *decryptor, *encoder);
 
     vector<Ciphertext> r_mac_ct(data->inp_ct);
-    recast_opaque(shares->r_mac_ct, r_mac_ct, *context);
+    recast_opaque(shares->r_mac_ct, r_mac_ct, context);
     shares->r_mac = conv_preprocess_invert(r_mac_ct, *data, *decryptor, *encoder);
 }
 
 void client_fc_decrypt(const ClientFHE *cfhe, const Metadata *data, ClientShares *shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(cfhe->context);
+    auto context = static_cast<SEALContext*>(cfhe->context);
 
     // Recast needed fhe helpers
     Decryptor *decryptor = reinterpret_cast<Decryptor*>(cfhe->decryptor);
@@ -878,17 +885,17 @@ void client_fc_decrypt(const ClientFHE *cfhe, const Metadata *data, ClientShares
 
     // Recast bytearrays to vectors of Ciphertexts and decrypt
     vector<Ciphertext> linear_ct(1);
-    recast_opaque(shares->linear_ct, linear_ct, *context);
+    recast_opaque(shares->linear_ct, linear_ct, context);
     shares->linear = new u64*[1];
     shares->linear[0] = fc_postprocess(linear_ct[0], *data, *encoder, *decryptor);
     
     vector<Ciphertext> linear_mac_ct(1);
-    recast_opaque(shares->linear_mac_ct, linear_mac_ct, *context);
+    recast_opaque(shares->linear_mac_ct, linear_mac_ct, context);
     shares->linear_mac = new u64*[1];
     shares->linear_mac[0] = fc_postprocess(linear_mac_ct[0], *data, *encoder, *decryptor);
      
     vector<Ciphertext> r_mac_ct(1);
-    recast_opaque(shares->r_mac_ct, r_mac_ct, *context);
+    recast_opaque(shares->r_mac_ct, r_mac_ct, context);
     shares->r_mac = new u64*[1];
     shares->r_mac[0] = fc_preprocess_invert(r_mac_ct, *data, *encoder, *decryptor);
 }
@@ -897,7 +904,7 @@ void client_fc_decrypt(const ClientFHE *cfhe, const Metadata *data, ClientShares
 void client_triples_decrypt(const ClientFHE *cfhe, SerialCT a, SerialCT b, SerialCT c, SerialCT a_mac,
     SerialCT b_mac, SerialCT c_mac, ClientTriples *shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(cfhe->context);
+    auto context = static_cast<SEALContext*>(cfhe->context);
     
     // Recast needed fhe helpers
     BatchEncoder *encoder = reinterpret_cast<BatchEncoder*>(cfhe->encoder);
@@ -911,12 +918,12 @@ void client_triples_decrypt(const ClientFHE *cfhe, SerialCT a, SerialCT b, Seria
     vector<Ciphertext> b_mac_ct(shares->vec_len);
     vector<Ciphertext> c_mac_ct(shares->vec_len);
     
-    recast_opaque(a, a_ct, *context);
-    recast_opaque(b, b_ct, *context);
-    recast_opaque(c, c_ct, *context);
-    recast_opaque(a_mac, a_mac_ct, *context);
-    recast_opaque(b_mac, b_mac_ct, *context);
-    recast_opaque(c_mac, c_mac_ct, *context);
+    recast_opaque(a, a_ct, context);
+    recast_opaque(b, b_ct, context);
+    recast_opaque(c, c_ct, context);
+    recast_opaque(a_mac, a_mac_ct, context);
+    recast_opaque(b_mac, b_mac_ct, context);
+    recast_opaque(c_mac, c_mac_ct, context);
 
     // Decrypt Ciphertexts
     shares->a_share = client_triples_postprocess(shares->num, a_ct, *encoder, *decryptor);
@@ -929,7 +936,7 @@ void client_triples_decrypt(const ClientFHE *cfhe, SerialCT a, SerialCT b, Seria
 
 void client_rand_decrypt(const ClientFHE *cfhe, SerialCT share, SerialCT mac_share, ClientTriples *shares) {
     // Grab shared pointer to SEALContext
-    auto context = static_cast<shared_ptr<SEALContext> *>(cfhe->context);
+    auto context = static_cast<SEALContext*>(cfhe->context);
     
     // Recast needed fhe helpers
     BatchEncoder *encoder = reinterpret_cast<BatchEncoder*>(cfhe->encoder);
@@ -938,8 +945,8 @@ void client_rand_decrypt(const ClientFHE *cfhe, SerialCT share, SerialCT mac_sha
     // Recast received bytearrays to Ciphertexts
     vector<Ciphertext> s_ct(shares->vec_len);
     vector<Ciphertext> mac_ct(shares->vec_len);
-    recast_opaque(share, s_ct, *context);
-    recast_opaque(mac_share, mac_ct, *context);
+    recast_opaque(share, s_ct, context);
+    recast_opaque(mac_share, mac_ct, context);
 
     // Decrypt Ciphertexts
     shares->a_share = client_triples_postprocess(shares->num, s_ct, *encoder, *decryptor);
@@ -954,8 +961,7 @@ void client_free_keys(const ClientFHE* cfhe) {
     delete (Decryptor*) cfhe->decryptor;
 
     // Delete SEALContext ptr
-    auto tmp_ptr = static_cast<shared_ptr<SEALContext> *>(cfhe->context);
-    shared_ptr<SEALContext> context = std::move(*tmp_ptr);
+    auto tmp_ptr = static_cast<SEALContext*>(cfhe->context);
     delete tmp_ptr;
 }
 
@@ -968,8 +974,7 @@ void server_free_keys(const ServerFHE *sfhe) {
     delete (Ciphertext*) sfhe->zero;
 
     // Delete SEALContext ptr
-    auto tmp_ptr = static_cast<shared_ptr<SEALContext> *>(sfhe->context);
-    shared_ptr<SEALContext> context = std::move(*tmp_ptr);
+    auto tmp_ptr = static_cast<SEALContext*>(sfhe->context);
     delete tmp_ptr;
 }
 
