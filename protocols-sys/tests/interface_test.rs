@@ -378,15 +378,19 @@ fn test_rand_gen() {
         server_mac_shares.push(F::uniform(&mut rng));
     }
 
-    let mut r_ct = client_gen.rands_preprocess(to_u64(&client_randomizers).as_slice());
-    server_gen.rands_preprocess(
+    let (mut client_triples, mut r_ct) = client_gen.rands_preprocess(to_u64(&client_randomizers).as_slice());
+    let mut server_triples = server_gen.rands_preprocess(
         to_u64(&server_randomizers).as_slice(),
         to_u64(&server_shares).as_slice(),
         to_u64(&server_mac_shares).as_slice(),
     );
-    let (mut r_ct, mut r_mac_ct) = server_gen.rands_online(r_ct.as_mut_slice());
-    let (client_shares, client_mac_shares) =
-        client_gen.rands_postprocess(r_ct.as_mut_slice(), r_mac_ct.as_mut_slice());
+    let (mut r_ct, mut r_mac_ct) = server_gen.rands_online(&mut server_triples, r_ct.as_mut_slice());
+
+    let (client_shares, client_mac_shares) = client_gen.rands_postprocess(
+        &mut client_triples,
+        r_ct.as_mut_slice(),
+        r_mac_ct.as_mut_slice()
+    );
 
     let server_rands = server_shares
         .into_iter()
@@ -447,12 +451,12 @@ fn test_triple_gen() {
         server_c_mac_shares.push(F::uniform(&mut rng));
     }
 
-    let (mut a_ct, mut b_ct) = client_gen.triples_preprocess(
+    let (mut client_triples, mut a_ct, mut b_ct) = client_gen.triples_preprocess(
         to_u64(&client_a_rand).as_slice(),
         to_u64(&client_b_rand).as_slice(),
     );
 
-    server_gen.triples_preprocess(
+    let mut server_triples = server_gen.triples_preprocess(
         to_u64(&server_a_rand).as_slice(),
         to_u64(&server_b_rand).as_slice(),
         to_u64(&server_c_rand).as_slice(),
@@ -465,7 +469,7 @@ fn test_triple_gen() {
     );
 
     let (mut a_ct, mut b_ct, mut c_ct, mut a_mac_ct, mut b_mac_ct, mut c_mac_ct) =
-        server_gen.triples_online(a_ct.as_mut_slice(), b_ct.as_mut_slice());
+        server_gen.triples_online(&mut server_triples, a_ct.as_mut_slice(), b_ct.as_mut_slice());
 
     let (
         client_a_shares,
@@ -475,6 +479,7 @@ fn test_triple_gen() {
         client_b_mac_shares,
         client_c_mac_shares,
     ) = client_gen.triples_postprocess(
+        &mut client_triples,
         a_ct.as_mut_slice(),
         b_ct.as_mut_slice(),
         c_ct.as_mut_slice(),

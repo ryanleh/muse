@@ -5,27 +5,22 @@ fn main() {
     let project_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let cplus_header = project_dir.join("c++/src/lib/interface.h");
 
-    // Build SEAL and Delphi
-    let seal_install_prefix = Config::new("c++/SEAL/native/src")
-        .define("CMAKE_BUILD_TYPE", "Release")
-        .define("SEAL_THROW_ON_TRANSPARENT_CIPHERTEXT", "0")
-        .define("SEAL_USE_ZLIB", "0") // This can be turned on to trade speed for bandwidth
-        .build();
-    let delphi_install_prefix = Config::new("c++").define("UNITTESTS", "0").build();
+    // Build Muse
+    let muse_install_prefix = Config::new("c++").define("UNITTESTS", "0").build();
 
-    // Add library paths
     println!(
         "cargo:rustc-link-search={}",
-        seal_install_prefix.join("lib").display()
+        muse_install_prefix.display()
     );
+
     println!(
-        "cargo:rustc-link-search={}",
-        delphi_install_prefix.display()
+        "cargo:rustc-link-search={}/lib",
+        muse_install_prefix.display()
     );
 
     // Link libraries
-    println!("cargo:rustc-link-lib=static=DelphiOffline");
-    println!("cargo:rustc-link-lib=static=seal-3.4");
+    println!("cargo:rustc-link-lib=static=seal-3.6");
+    println!("cargo:rustc-link-lib=static=MuseOffline");
     println!("cargo:rustc-link-lib=dylib=stdc++");
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
