@@ -83,6 +83,14 @@ path = "src/latency/mnist/server.rs"
 #path = "src/throughput/linear_only/server.rs"
 #
 [[bin]]
+name = "end-server"
+path = "src/latency/end_test/server.rs"
+
+[[bin]]
+name = "end-client"
+path = "src/latency/end_test/client.rs"
+
+[[bin]]
 name = "triples-gen-server"
 path = "src/latency/triples_gen/server.rs"
 

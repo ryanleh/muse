@@ -378,18 +378,20 @@ fn test_rand_gen() {
         server_mac_shares.push(F::uniform(&mut rng));
     }
 
-    let (mut client_triples, mut r_ct) = client_gen.rands_preprocess(to_u64(&client_randomizers).as_slice());
+    let (mut client_triples, mut r_ct) =
+        client_gen.rands_preprocess(to_u64(&client_randomizers).as_slice());
     let mut server_triples = server_gen.rands_preprocess(
         to_u64(&server_randomizers).as_slice(),
         to_u64(&server_shares).as_slice(),
         to_u64(&server_mac_shares).as_slice(),
     );
-    let (mut r_ct, mut r_mac_ct) = server_gen.rands_online(&mut server_triples, r_ct.as_mut_slice());
+    let (mut r_ct, mut r_mac_ct) =
+        server_gen.rands_online(&mut server_triples, r_ct.as_mut_slice());
 
     let (client_shares, client_mac_shares) = client_gen.rands_postprocess(
         &mut client_triples,
         r_ct.as_mut_slice(),
-        r_mac_ct.as_mut_slice()
+        r_mac_ct.as_mut_slice(),
     );
 
     let server_rands = server_shares
@@ -468,8 +470,12 @@ fn test_triple_gen() {
         to_u64(&server_c_mac_shares).as_slice(),
     );
 
-    let (mut a_ct, mut b_ct, mut c_ct, mut a_mac_ct, mut b_mac_ct, mut c_mac_ct) =
-        server_gen.triples_online(&mut server_triples, a_ct.as_mut_slice(), b_ct.as_mut_slice());
+    let (mut a_ct, mut b_ct, mut c_ct, mut a_mac_ct, mut b_mac_ct, mut c_mac_ct) = server_gen
+        .triples_online(
+            &mut server_triples,
+            a_ct.as_mut_slice(),
+            b_ct.as_mut_slice(),
+        );
 
     let (
         client_a_shares,

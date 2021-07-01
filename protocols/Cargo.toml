@@ -25,7 +25,7 @@ ndarray = { version = "0.12", features = [ "serde-1" ] }
 crypto-primitives = { path = "../crypto-primitives" }
 ocelot = { version = "0.3", git = "https://github.com/GaloisInc/ocelot/" }
 scuttlebutt = { version = "0.3", git = "https://github.com/GaloisInc/scuttlebutt/", features = [ "serde" ], tag = "0.3.2" }
-rayon = { version = "1" }
+rayon = { version = "1.5.1" }
 neural-network = { path = "../neural-network" }
 rand = { version = "0.6" }
 bincode = "1.0"

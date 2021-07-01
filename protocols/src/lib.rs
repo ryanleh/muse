@@ -1,6 +1,9 @@
 use algebra::fixed_point::FixedPoint;
 use async_std::io::{Read, Write};
-use io_utils::IMuxAsync;
+use io_utils::{
+    imux::IMuxAsync,
+    threaded::{ThreadedReader, ThreadedWriter},
+};
 use protocols_sys::{ClientFHE, KeyShare, ServerFHE};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -50,6 +53,29 @@ pub fn server_keygen<R: Read + Unpin>(
 ) -> Result<ServerFHE, bincode::Error> {
     let recv_time = timer_start!(|| "Receiving keys");
     let keys: ServerKeyRcv = crate::bytes::deserialize(reader)?;
+    timer_end!(recv_time);
+    let mut key_share = KeyShare::new();
+    Ok(key_share.receive(keys.msg()))
+}
+
+pub fn client_keygen_threaded<W: Write + Unpin + Send>(
+    writer: &mut ThreadedWriter<W>,
+) -> Result<ClientFHE, bincode::Error> {
+    let mut key_share = KeyShare::new();
+    let gen_time = timer_start!(|| "Generating keys");
+    let (cfhe, keys_vec) = key_share.generate();
+    timer_end!(gen_time);
+
+    let send_time = timer_start!(|| "Sending keys");
+    let sent_message = ClientKeySend::new(&keys_vec);
+    crate::bytes::serialize_t(writer, &sent_message);
+    timer_end!(send_time);
+    Ok(cfhe)
+}
+
+pub fn server_keygen_threaded(reader: &mut ThreadedReader) -> Result<ServerFHE, bincode::Error> {
+    let recv_time = timer_start!(|| "Receiving keys");
+    let keys: ServerKeyRcv = crate::bytes::deserialize_t(reader)?;
     timer_end!(recv_time);
     let mut key_share = KeyShare::new();
     Ok(key_share.receive(keys.msg()))

@@ -5,7 +5,7 @@ use algebra::{
     FpParameters, PrimeField, UniformRandom,
 };
 use crypto_primitives::additive_share::{AuthShare, Share};
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use neural_network::{
     layers::*,
     tensors::{Input, Output},
@@ -13,11 +13,8 @@ use neural_network::{
 };
 use protocols_sys::{SealClientACG, SealServerACG, *};
 use rand::{CryptoRng, RngCore};
-use std::{
-    marker::PhantomData,
-    os::raw::c_char,
-};
-    
+use std::{marker::PhantomData, os::raw::c_char};
+
 use async_std::io::{Read, Write};
 
 pub struct LinearProtocol<P: FixedPointParameters> {
@@ -234,7 +231,11 @@ where
     }
 
     /// Server receives an encrypted vector from the client and shares its MAC
-    pub fn offline_server_auth_share<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
+    pub fn offline_server_auth_share<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: RngCore + CryptoRng,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         input_dims: (usize, usize, usize, usize),

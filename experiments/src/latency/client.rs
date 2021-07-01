@@ -6,29 +6,27 @@ use ::neural_network::{
 };
 use algebra::{fields::near_mersenne_64::F, Field, PrimeField, UniformRandom};
 use async_std::{
-    prelude::*,
     io::{BufReader, BufWriter},
     net::TcpStream,
-    task
+    prelude::*,
+    task,
 };
 use crypto_primitives::{
     gc::fancy_garbling::{Encoder, GarbledCircuit, Wire},
     AuthAdditiveShare, AuthShare, Share,
 };
-use io_utils::{CountingIO, IMuxAsync};
+use io_utils::{counting::*, imux::*, threaded::*};
 use num_traits::identities::Zero;
 use protocols::{
-    client_keygen,
+    client_keygen, client_keygen_threaded,
     gc::ClientGcMsgRcv,
     linear_layer::LinearProtocol,
     mpc::{ClientMPC, MPC},
     mpc_offline::{ClientOfflineMPC, OfflineMPC},
     neural_network::NNProtocol,
 };
-use protocols_sys::{
-    client_acg, server_acg, ClientACG, ClientFHE, SealClientACG, SealServerACG, ServerACG,
-    ServerFHE,
-};
+use protocols_sys::*;
+use rayon::ThreadPoolBuilder;
 use std::collections::BTreeMap;
 
 pub fn client_connect(
@@ -87,8 +85,141 @@ pub fn nn_client<R: RngCore + CryptoRng>(
             writer.count(),
         )
     };
-    add_to_trace!(|| "Offline Communication", || format!("Read {} bytes\nWrote {} bytes", offline_read, offline_write));
-    add_to_trace!(|| "Online Communication", || format!("Read {} bytes\nWrote {} bytes", online_read, online_write));
+    add_to_trace!(|| "Offline Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        offline_read, offline_write
+    ));
+    add_to_trace!(|| "Online Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        online_read, online_write
+    ));
+}
+
+pub fn end_test<R: RngCore + CryptoRng + Send>(
+    server_addr: &str,
+    num_triples: usize,
+    num_rand: usize,
+    rng: &mut R,
+) {
+    use protocols::server_keygen;
+    use protocols_sys::{SealCT, SerialCT};
+
+    let (mut reader, mut writer) = client_connect(server_addr);
+    let mut reader = ThreadedReader::new(reader);
+    let mut writer = ThreadedWriter::new(writer);
+
+    // Keygen
+    let cfhe = client_keygen_threaded(&mut writer).unwrap();
+    //writer.reset();
+
+    // TODO: CFHE should be fine to clone but try the unsafe and see what happens
+
+    // Generate triples
+    let _ = rayon::scope(|s| {
+        let cfhe_ref = &cfhe;
+        let cfhe_ref2 = &cfhe;
+        let mut reader_2 = reader.clone();
+        let mut writer_2 = writer.clone();
+        std::thread::sleep_ms(5000);
+
+        use rand::SeedableRng;
+
+        s.spawn(move |_| {
+            let mut rng = &mut rand::ChaChaRng::from_seed([0; 32]);
+            let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
+            pool.install(|| {
+                let client_gen = ClientOfflineMPC::<F, _>::new(cfhe_ref);
+                let triples = timer_start!(|| "Generating triples");
+                client_gen.triples_gen_t(&mut reader, &mut writer, rng, num_triples);
+                timer_end!(triples);
+            });
+        });
+
+        s.spawn(move |_| {
+            let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
+            pool.install(|| {
+                let client_gen = ClientOfflineMPC::<F, _>::new(&cfhe_ref2);
+                let triples = timer_start!(|| "Generating triples2");
+                client_gen.triples_gen_t(&mut reader_2, &mut writer_2, rng, num_triples);
+                timer_end!(triples);
+            });
+        });
+    });
+
+    //    let (mut reader, mut writer) = client_connect(server_addr);
+    //
+    //    // Keygen
+    //    let cfhe = client_keygen(&mut writer).unwrap();
+    //    let mut sfhe = server_keygen(&mut reader).unwrap();
+    //    reader.reset();
+    //    writer.reset();
+    //
+    //    // Generate dummy labels/layer for CDS
+    //    let activations: usize = layers.iter().map(|e| *e).sum();
+    //    let modulus_bits = <F as PrimeField>::size_in_bits();
+    //    let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
+    //
+    //    let out_mac_shares = vec![F::zero(); activations];
+    //    let out_shares_bits = vec![F::zero(); activations * modulus_bits];
+    //    let inp_mac_shares = vec![F::zero(); activations];
+    //    let inp_rands_bits = vec![F::zero(); activations * modulus_bits];
+    //
+    //    let num_rands = 2 * (activations + activations * modulus_bits);
+    //
+    //    // Generate rands
+    //    let gen = ClientOfflineMPC::new(&cfhe);
+    //
+    //    let input_time = timer_start!(|| "Input Auth");
+    //    let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
+    //    let mut mpc = ClientMPC::new(rands, Vec::new());
+    //
+    //    // Share inputs
+    //    let share_time = timer_start!(|| "Client receiving inputs");
+    //    let s_out_mac_keys = mpc
+    //        .recv_private_inputs(&mut reader, &mut writer, layers.len())
+    //        .unwrap();
+    //    let s_inp_mac_keys = mpc
+    //        .recv_private_inputs(&mut reader, &mut writer, layers.len())
+    //        .unwrap();
+    //    let s_out_mac_shares = mpc
+    //        .recv_private_inputs(&mut reader, &mut writer, activations)
+    //        .unwrap();
+    //    let s_inp_mac_shares = mpc
+    //        .recv_private_inputs(&mut reader, &mut writer, activations)
+    //        .unwrap();
+    //    let zero_labels = mpc
+    //        .recv_private_inputs(
+    //            &mut reader,
+    //            &mut writer,
+    //            2 * activations * modulus_bits * elems_per_label,
+    //        )
+    //        .unwrap();
+    //    let one_labels = mpc
+    //        .recv_private_inputs(
+    //            &mut reader,
+    //            &mut writer,
+    //            2 * activations * modulus_bits * elems_per_label,
+    //        )
+    //        .unwrap();
+    //    timer_end!(share_time);
+    //
+    //    // Receive client shares
+    //    let recv_time = timer_start!(|| "Client sending inputs");
+    //    let out_bits = mpc
+    //        .private_inputs(&mut reader, &mut writer, out_shares_bits.as_slice(), rng)
+    //        .unwrap();
+    //    let inp_bits = mpc
+    //        .private_inputs(&mut reader, &mut writer, inp_rands_bits.as_slice(), rng)
+    //        .unwrap();
+    //    let c_out_mac_shares = mpc
+    //        .private_inputs(&mut reader, &mut writer, out_mac_shares.as_slice(), rng)
+    //        .unwrap();
+    //    let c_inp_mac_shares = mpc
+    //        .private_inputs(&mut reader, &mut writer, inp_mac_shares.as_slice(), rng)
+    //        .unwrap();
+    //    timer_end!(recv_time);
+    //    timer_end!(input_time);
+    //    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
 }
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
@@ -183,7 +314,11 @@ pub fn acg<R: RngCore + CryptoRng>(
         }
     }
     timer_end!(linear_time);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
@@ -217,7 +352,11 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
         r_wires.extend(r_wire_chunks);
     }
     timer_end!(rcv_gc_time);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &mut R) {
@@ -232,7 +371,11 @@ pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &
     let triples = timer_start!(|| "Generating triples");
     client_gen.triples_gen(&mut reader, &mut writer, rng, num);
     timer_end!(triples);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
@@ -262,7 +405,11 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
         rng,
     )
     .unwrap();
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
@@ -342,7 +489,11 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 //pub fn async_input_auth<R: RngCore + CryptoRng>(

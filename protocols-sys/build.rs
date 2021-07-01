@@ -8,10 +8,7 @@ fn main() {
     // Build Muse
     let muse_install_prefix = Config::new("c++").define("UNITTESTS", "0").build();
 
-    println!(
-        "cargo:rustc-link-search={}",
-        muse_install_prefix.display()
-    );
+    println!("cargo:rustc-link-search={}", muse_install_prefix.display());
 
     println!(
         "cargo:rustc-link-search={}/lib",
