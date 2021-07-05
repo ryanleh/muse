@@ -65,7 +65,7 @@ where
     P::Field: AuthShare,
 {
     /// Returns the number of rand pairs and triples needed for the CDS circuit
-    fn num_rands_triples(
+    pub fn num_rands_triples(
         num_layers: usize,
         total_size: usize,
         modulus_bits: usize,
@@ -199,10 +199,12 @@ where
         Ok((label_shares, rho_1, rho_2))
     }
 
+    // TODO: clarify that you need to preprocess enough stuff before
     pub fn server_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         sfhe: &ServerFHE,
+        mpc: &mut ServerMPC<P::Field>,
         layer_sizes: &[usize],
         out_mac_keys: &[P::Field],
         out_mac_shares: &[P::Field],
@@ -215,12 +217,6 @@ where
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         let total_size = out_mac_shares.len();
         let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
-        let (num_rands, num_triples) = CDSProtocol::<P>::num_rands_triples(
-            layer_sizes.len(),
-            total_size,
-            modulus_bits,
-            elems_per_label,
-        );
 
         let (zero_labels, one_labels): (Vec<P::Field>, Vec<P::Field>) = labels
             .iter()
@@ -231,13 +227,6 @@ where
                 )
             })
             .unzip();
-
-        // Generate rands and triples
-        let mac_key = P::Field::uniform(rng);
-        let gen = InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
-        let rands = gen.rands_gen(reader, writer, rng, num_rands);
-        let triples = gen.triples_gen(reader, writer, rng, num_triples);
-        let mut mpc = ServerMPC::new(rands, triples, mac_key);
 
         // Share inputs
         // TODO: Trim amount of randomness generated
@@ -293,7 +282,7 @@ where
             let (label_shares, rho_1, rho_2) = CDSProtocol::<P>::cds_subcircuit(
                 reader,
                 writer,
-                &mut mpc,
+                mpc,
                 modulus_bits,
                 elems_per_label,
                 &zero_labels[label_range.clone()],
@@ -361,6 +350,7 @@ where
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         cfhe: &ClientFHE,
+        mpc: &mut ClientMPC<P::Field>,
         layer_sizes: &[usize],
         out_mac_shares: &[P::Field],
         out_shares: &[P::Field],
@@ -372,12 +362,6 @@ where
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         let total_size = out_mac_shares.len();
         let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
-        let (num_rands, num_triples) = CDSProtocol::<P>::num_rands_triples(
-            layer_sizes.len(),
-            out_mac_shares.len(),
-            modulus_bits,
-            elems_per_label,
-        );
 
         // Compute bit decomposition of shares
         let out_bits: Vec<P::Field> = out_shares
@@ -397,12 +381,6 @@ where
             })
             .map(|b| P::Field::from_repr((b as u64).into()))
             .collect();
-
-        // Generate rands and triples
-        let gen = InsecureClientOfflineMPC::new(&cfhe);
-        let rands = gen.rands_gen(reader, writer, rng, num_rands);
-        let triples = gen.triples_gen(reader, writer, rng, num_triples);
-        let mut mpc = ClientMPC::new(rands, triples);
 
         // Receive server inputs
         let recv_time = timer_start!(|| "Client receiving inputs");
@@ -457,7 +435,7 @@ where
             let (label_shares, rho_1, rho_2) = CDSProtocol::<P>::cds_subcircuit(
                 reader,
                 writer,
-                &mut mpc,
+                mpc,
                 modulus_bits,
                 elems_per_label,
                 &zero_labels[label_range.clone()],

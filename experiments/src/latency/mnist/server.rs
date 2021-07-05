@@ -24,6 +24,7 @@ fn get_args() -> ArgMatches<'static> {
 fn main() {
     let vs = tch::nn::VarStore::new(tch::Device::cuda_if_available());
     let mut rng = ChaChaRng::from_seed(RANDOMNESS);
+    let mut rng_2 = ChaChaRng::from_seed(RANDOMNESS);
 
     let args = get_args();
     let port = args.value_of("port").unwrap_or("8000");
@@ -31,5 +32,5 @@ fn main() {
 
     let network = construct_mnist(Some(&vs.root()), 1, &mut rng);
 
-    experiments::latency::server::nn_server(&server_addr, network, &mut rng);
+    experiments::latency::server::nn_server(&server_addr, network, &mut rng, &mut rng_2);
 }
