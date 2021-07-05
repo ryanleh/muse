@@ -1,6 +1,6 @@
 use algebra::fixed_point::FixedPoint;
 use async_std::io::{Read, Write};
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use protocols_sys::{ClientFHE, KeyShare, ServerFHE};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;

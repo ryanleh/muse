@@ -7,10 +7,7 @@ use neural_network::{
 
 use async_std::io::{Read, Write};
 use rand::{CryptoRng, RngCore};
-use std::{
-    collections::BTreeMap,
-    marker::PhantomData,
-};
+use std::{collections::BTreeMap, marker::PhantomData};
 
 use algebra::{
     fixed_point::{FixedPoint, FixedPointParameters},
@@ -29,7 +26,7 @@ use crypto_primitives::{
 };
 
 use crate::{gc::ReluProtocol, linear_layer::LinearProtocol};
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use protocols_sys::{
     client_acg, server_acg, ClientACG, ClientFHE, SealClientACG, SealServerACG, ServerACG,
     ServerFHE,
@@ -124,7 +121,11 @@ where
     >,
     P::Field: AuthShare,
 {
-    pub fn offline_server_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+    pub fn offline_server_protocol<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: CryptoRng + RngCore,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
@@ -317,7 +318,11 @@ where
         })
     }
 
-    pub fn offline_client_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
+    pub fn offline_client_protocol<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: RngCore + CryptoRng,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
@@ -706,22 +711,21 @@ where
                 }
             }
         }
-        let result = bytes::deserialize(reader)
-            .map(|output: MsgRcv<P>| {
-                // Receive server input and reset multiplication count to
-                // avoid an early reduction
-                let mut server_output_share = output.msg();
-                server_output_share
-                    .iter_mut()
-                    .for_each(|e| e.inner = FixedPoint::new(e.inner.inner));
-                let mut result = server_output_share.combine(&next_layer_input);
-                // Reduce the output based on how many linear layers there have been
-                // such last reduction
-                result.iter_mut().for_each(|e| {
-                    *e = FixedPoint::with_num_muls(e.inner, num_muls).signed_reduce();
-                });
-                result
-            })?;
+        let result = bytes::deserialize(reader).map(|output: MsgRcv<P>| {
+            // Receive server input and reset multiplication count to
+            // avoid an early reduction
+            let mut server_output_share = output.msg();
+            server_output_share
+                .iter_mut()
+                .for_each(|e| e.inner = FixedPoint::new(e.inner.inner));
+            let mut result = server_output_share.combine(&next_layer_input);
+            // Reduce the output based on how many linear layers there have been
+            // such last reduction
+            result.iter_mut().for_each(|e| {
+                *e = FixedPoint::with_num_muls(e.inner, num_muls).signed_reduce();
+            });
+            result
+        })?;
         timer_end!(start_time);
         Ok(result)
     }

@@ -6,16 +6,16 @@ use ::neural_network::{
 };
 use algebra::{fields::near_mersenne_64::F, Field, PrimeField, UniformRandom};
 use async_std::{
-    prelude::*,
     io::{BufReader, BufWriter},
     net::TcpStream,
-    task
+    prelude::*,
+    task,
 };
 use crypto_primitives::{
     gc::fancy_garbling::{Encoder, GarbledCircuit, Wire},
     AuthAdditiveShare, AuthShare, Share,
 };
-use io_utils::{CountingIO, IMuxAsync};
+use io_utils::{counting::CountingIO, imux::IMuxAsync};
 use num_traits::identities::Zero;
 use protocols::{
     client_keygen,
@@ -87,8 +87,14 @@ pub fn nn_client<R: RngCore + CryptoRng>(
             writer.count(),
         )
     };
-    add_to_trace!(|| "Offline Communication", || format!("Read {} bytes\nWrote {} bytes", offline_read, offline_write));
-    add_to_trace!(|| "Online Communication", || format!("Read {} bytes\nWrote {} bytes", online_read, online_write));
+    add_to_trace!(|| "Offline Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        offline_read, offline_write
+    ));
+    add_to_trace!(|| "Online Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        online_read, online_write
+    ));
 }
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
@@ -183,7 +189,11 @@ pub fn acg<R: RngCore + CryptoRng>(
         }
     }
     timer_end!(linear_time);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
@@ -217,7 +227,11 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
         r_wires.extend(r_wire_chunks);
     }
     timer_end!(rcv_gc_time);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &mut R) {
@@ -232,7 +246,11 @@ pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &
     let triples = timer_start!(|| "Generating triples");
     client_gen.triples_gen(&mut reader, &mut writer, rng, num);
     timer_end!(triples);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
@@ -262,7 +280,11 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
         rng,
     )
     .unwrap();
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
@@ -342,7 +364,11 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);
-    add_to_trace!(|| "Communication", || format!("Read {} bytes\nWrote {} bytes", reader.count(), writer.count()));
+    add_to_trace!(|| "Communication", || format!(
+        "Read {} bytes\nWrote {} bytes",
+        reader.count(),
+        writer.count()
+    ));
 }
 
 //pub fn async_input_auth<R: RngCore + CryptoRng>(

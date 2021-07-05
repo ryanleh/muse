@@ -1,16 +1,16 @@
 use crate::bytes;
 use crate::{error::MpcError, InMessage, OutMessage};
 use algebra::fields::{Fp64, Fp64Parameters};
+use async_std::io::{Read, Write};
 use crypto_primitives::{
     additive_share::{AdditiveShare, AuthAdditiveShare, AuthShare, Share},
     beavers_mul::{BeaversMul, BlindedInputs, BlindedSharedInputs, PBeaversMul, Triple},
 };
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use itertools::izip;
 use num_traits::identities::Zero;
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
-use async_std::io::{Read, Write};
 
 pub struct MpcProtocolType;
 
@@ -107,62 +107,61 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
         Ok(izip!(x, y).map(|(l, r)| l - r).collect())
     }
 
-
-// TODO
-//    async fn mul<D: EvaluationDomain<F>>(
-//        &mut self,
-//        a: Evaluations<F, D>,
-//        b: Evaluations<F, D>,
-//    ) -> Result<Evaluations<F, D>, DelegationError> {
-//        let domain = a.domain().clone();
-//
-//        // Consume necessary triples
-//        let req_triples = a.evals.len();
-//        let triples = self.get_triples(req_triples)?;
-//
-//        // Compute blinded shares using the triples.
-//        let blinded_shares = a
-//            .evals
-//            .into_iter()
-//            .zip(b.evals.into_iter())
-//            .zip(triples.iter())
-//            .map(|((a, b), t)| FBeaversMul::share_and_blind_inputs(&a, &b, t))
-//            .collect::<Vec<_>>();
-//
-//        // Send blinded shares to all parties
-//        let send_shares_f = self
-//            .writers
-//            .iter_mut()
-//            .map(|w| crate::IO::serialize_write_and_flush(&blinded_shares, w))
-//            .collect::<FuturesUnordered<_>>()
-//            .collect::<Vec<_>>();
-//
-//        // Receive blinded shares from all parties
-//        let recv_shares_f = self
-//            .readers
-//            .iter_mut()
-//            .map(|r| crate::IO::read_and_deserialize::<Vec<BlindedSharedInputs<F>>, R>(r))
-//            .collect::<FuturesUnordered<_>>();
-//
-//        // Combine all vectors of shares together
-//        let blinded_inputs =
-//            recv_shares_f.fold(Ok(blinded_shares.clone()), |a, b| Self::add_entries(a, b));
-//
-//        // Concurrently receive/add shares together and send shares
-//        let (blinded_inputs, send_shares_f) = join(blinded_inputs, send_shares_f).await;
-//
-//        // Unwrap any errors that occured when sending.
-//        send_shares_f.into_iter().collect::<Result<Vec<_>, _>>()?;
-//
-//        // Use blinded_inputs and triples to compute local share
-//        let result = blinded_inputs?
-//            .into_iter()
-//            .zip(triples)
-//            .map(|(bi, t)| FBeaversMul::multiply_blinded_inputs(self.party_idx, bi.into(), &t))
-//            .collect();
-//
-//        Ok(Evaluations::from_vec_and_domain(result, domain))
-//    }
+    // TODO
+    //    async fn mul<D: EvaluationDomain<F>>(
+    //        &mut self,
+    //        a: Evaluations<F, D>,
+    //        b: Evaluations<F, D>,
+    //    ) -> Result<Evaluations<F, D>, DelegationError> {
+    //        let domain = a.domain().clone();
+    //
+    //        // Consume necessary triples
+    //        let req_triples = a.evals.len();
+    //        let triples = self.get_triples(req_triples)?;
+    //
+    //        // Compute blinded shares using the triples.
+    //        let blinded_shares = a
+    //            .evals
+    //            .into_iter()
+    //            .zip(b.evals.into_iter())
+    //            .zip(triples.iter())
+    //            .map(|((a, b), t)| FBeaversMul::share_and_blind_inputs(&a, &b, t))
+    //            .collect::<Vec<_>>();
+    //
+    //        // Send blinded shares to all parties
+    //        let send_shares_f = self
+    //            .writers
+    //            .iter_mut()
+    //            .map(|w| crate::IO::serialize_write_and_flush(&blinded_shares, w))
+    //            .collect::<FuturesUnordered<_>>()
+    //            .collect::<Vec<_>>();
+    //
+    //        // Receive blinded shares from all parties
+    //        let recv_shares_f = self
+    //            .readers
+    //            .iter_mut()
+    //            .map(|r| crate::IO::read_and_deserialize::<Vec<BlindedSharedInputs<F>>, R>(r))
+    //            .collect::<FuturesUnordered<_>>();
+    //
+    //        // Combine all vectors of shares together
+    //        let blinded_inputs =
+    //            recv_shares_f.fold(Ok(blinded_shares.clone()), |a, b| Self::add_entries(a, b));
+    //
+    //        // Concurrently receive/add shares together and send shares
+    //        let (blinded_inputs, send_shares_f) = join(blinded_inputs, send_shares_f).await;
+    //
+    //        // Unwrap any errors that occured when sending.
+    //        send_shares_f.into_iter().collect::<Result<Vec<_>, _>>()?;
+    //
+    //        // Use blinded_inputs and triples to compute local share
+    //        let result = blinded_inputs?
+    //            .into_iter()
+    //            .zip(triples)
+    //            .map(|(bi, t)| FBeaversMul::multiply_blinded_inputs(self.party_idx, bi.into(), &t))
+    //            .collect();
+    //
+    //        Ok(Evaluations::from_vec_and_domain(result, domain))
+    //    }
 
     /// Multiply shares `x` and `y`
     fn mul<R: Read + Send + Unpin, W: Write + Send + Unpin>(
@@ -382,8 +381,7 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
         // Send shares to client
         // TODO: Thread this
         for _ in 0..((num_recv as f64 / Self::BATCH_SIZE as f64).ceil() as usize) {
-            let recv_message: AuthShareRcv<Fp64<P>> =
-                bytes::deserialize(&mut *reader).unwrap();
+            let recv_message: AuthShareRcv<Fp64<P>> = bytes::deserialize(&mut *reader).unwrap();
             shares.extend(recv_message.msg());
         }
         Ok(shares)
@@ -598,20 +596,20 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
 mod tests {
     use super::*;
     use algebra::{fields::near_mersenne_64::F, UniformRandom};
-    use crypto_primitives::beavers_mul::InsecureTripleGen;
-    use io_utils::IMuxAsync;
-    use num_traits::identities::Zero;
-    use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaChaRng;
     use async_std::{
         io::{BufReader, BufWriter, Read, Write},
         net::{TcpListener, TcpStream},
-        task
+        task,
     };
+    use crypto_primitives::beavers_mul::InsecureTripleGen;
     use futures::{
         stream::{FuturesUnordered, StreamExt},
         SinkExt,
     };
+    use io_utils::IMuxAsync;
+    use num_traits::identities::Zero;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaChaRng;
 
     const RANDOMNESS: [u8; 32] = [
         0x99, 0xe0, 0x8f, 0xbc, 0x89, 0xa7, 0x34, 0x01, 0x45, 0x86, 0x82, 0xb6, 0x51, 0xda, 0xf4,
@@ -619,7 +617,12 @@ mod tests {
         0x52, 0xd2,
     ];
 
-    fn get_connection(server_addr: &str) -> ((IMuxAsync<impl Read>, IMuxAsync<impl Write>), (IMuxAsync<impl Read>, IMuxAsync<impl Write>)) {
+    fn get_connection(
+        server_addr: &str,
+    ) -> (
+        (IMuxAsync<impl Read>, IMuxAsync<impl Write>),
+        (IMuxAsync<impl Read>, IMuxAsync<impl Write>),
+    ) {
         crossbeam::thread::scope(|s| {
             let server_io = s.spawn(|_| {
                 task::block_on(async {
@@ -640,7 +643,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             let client_io = s.spawn(|_| {
                 task::block_on(async {
-                    let stream = TcpStream::connect(server_addr).await.expect("Client connection failed!");
+                    let stream = TcpStream::connect(server_addr)
+                        .await
+                        .expect("Client connection failed!");
                     let read_stream = IMuxAsync::new(vec![BufReader::new(stream.clone())]);
                     let write_stream = IMuxAsync::new(vec![BufWriter::new(stream)]);
                     (read_stream, write_stream)

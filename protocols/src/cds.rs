@@ -10,16 +10,14 @@ use crypto_primitives::{
     gc::{fancy_garbling, fancy_garbling::Wire},
     PBeaversMul,
 };
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use itertools::{interleave, izip};
 use num_traits::{One, Zero};
 use protocols_sys::{ClientFHE, ServerFHE};
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, Block, Channel};
-use std::{
-    marker::PhantomData,
-};
+use std::marker::PhantomData;
 
 use async_std::io::{Read, Write};
 
@@ -236,7 +234,8 @@ where
 
         // Generate rands and triples
         let mac_key = P::Field::uniform(rng);
-        let gen = InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
+        //let gen = InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
+        let gen = ServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
         let rands = gen.rands_gen(reader, writer, rng, num_rands);
         let triples = gen.triples_gen(reader, writer, rng, num_triples);
         let mut mpc = ServerMPC::new(rands, triples, mac_key);
@@ -401,7 +400,8 @@ where
             .collect();
 
         // Generate rands and triples
-        let gen = InsecureClientOfflineMPC::new(&cfhe);
+        //let gen = InsecureClientOfflineMPC::new(&cfhe);
+        let gen = ClientOfflineMPC::new(&cfhe);
         let rands = gen.rands_gen(reader, writer, rng, num_rands);
         let triples = gen.triples_gen(reader, writer, rng, num_triples);
         let mut mpc = ClientMPC::new(rands, triples);
@@ -524,7 +524,11 @@ where
 
     /// Insecure protocol where server receives client input in cleartext,
     /// checks MACs, and sends back correct labels
-    pub fn insecure_server_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+    pub fn insecure_server_cds<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: CryptoRng + RngCore,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         _sfhe: &ServerFHE,
@@ -595,9 +599,15 @@ where
             .collect();
 
         let client_labels: Vec<Block> = izip!(gc_bits, labels)
-            .map(|(b, (zero, one))| {
-                if b { one.clone() } else { zero.clone() }
-            })
+            .map(
+                |(b, (zero, one))| {
+                    if b {
+                        one.clone()
+                    } else {
+                        zero.clone()
+                    }
+                },
+            )
             .collect();
         let send_message = InsecureBlockSend::new(&client_labels);
         bytes::serialize(&mut *writer, &send_message)?;
@@ -606,7 +616,11 @@ where
 
     /// Insecure protocol where server receives client input in cleartext,
     /// checks MACs, and sends back correct labels
-    pub fn insecure_client_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+    pub fn insecure_client_cds<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: CryptoRng + RngCore,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         _cfhe: &ClientFHE,
@@ -627,7 +641,7 @@ where
         bytes::serialize(&mut *writer, &send_message)?;
         let send_message = InsecureMsgSend::<P>::new(&input_rands);
         bytes::serialize(&mut *writer, &send_message)?;
-        
+
         let recv_message: InsecureBlockRcv = bytes::deserialize(&mut *reader)?;
         let labels = recv_message.msg();
         Ok(labels

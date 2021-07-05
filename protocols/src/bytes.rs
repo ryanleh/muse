@@ -2,7 +2,7 @@ use async_std::{
     io::{Read, Write},
     task,
 };
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 
 #[inline]
 pub async fn async_serialize<W, T>(w: &mut IMuxAsync<W>, value: &T) -> Result<(), bincode::Error>

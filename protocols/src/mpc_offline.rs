@@ -5,7 +5,7 @@ use crypto_primitives::{
     additive_share::{AdditiveShare, AuthAdditiveShare, AuthShare, Share},
     beavers_mul::Triple,
 };
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use itertools::izip;
 use num_traits::Zero;
 use protocols_sys::{ClientFHE, ClientGen, SealClientGen, SealServerGen, ServerFHE, ServerGen};
@@ -25,7 +25,7 @@ use async_std::{
     io::{Read, Write},
     prelude::*,
     sync::RwLock,
-    task
+    task,
 };
 use futures::{
     stream::{FuturesUnordered, StreamExt},
@@ -148,11 +148,11 @@ impl<P: Fp64Parameters> ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
         client_auth_shares
     }
 
-// TODO
-//    pub fn recv_mac<R: Read + Send + Unpin>(&self, reader: &mut IMuxAsync<R>) -> Vec<c_char> {
-//        let recv_message: MsgRcv = bytes::deserialize(&mut *reader).unwrap();
-//        recv_message.msg().1
-//    }
+    // TODO
+    //    pub fn recv_mac<R: Read + Send + Unpin>(&self, reader: &mut IMuxAsync<R>) -> Vec<c_char> {
+    //        let recv_message: MsgRcv = bytes::deserialize(&mut *reader).unwrap();
+    //        recv_message.msg().1
+    //    }
 }
 
 impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
@@ -185,12 +185,12 @@ impl<P: Fp64Parameters> ServerOfflineMPC<Fp64<P>, SealServerGen<'_>> {
         shares
     }
 
-// TODO
-//    pub fn send_mac<W: Write + Send + Unpin>(&self, writer: &mut IMuxAsync<W>, mac_key: Vec<c_char>) {
-//        let msg = (0, mac_key);
-//        let send_message = MsgSend::new(&msg);
-//        bytes::serialize(writer, &send_message).unwrap();
-//    }
+    // TODO
+    //    pub fn send_mac<W: Write + Send + Unpin>(&self, writer: &mut IMuxAsync<W>, mac_key: Vec<c_char>) {
+    //        let msg = (0, mac_key);
+    //        let send_message = MsgSend::new(&msg);
+    //        bytes::serialize(writer, &send_message).unwrap();
+    //    }
 }
 
 impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealClientGen<'_>> {
@@ -306,7 +306,9 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     while let Some((batch_idx, mut seal_state, ct)) = recv_1.next().await {
                         let msg = (batch_idx, ct);
                         let send_message = MsgSend::new(&msg);
-                        bytes::async_serialize(&mut *writer, &send_message).await.unwrap();
+                        bytes::async_serialize(&mut *writer, &send_message)
+                            .await
+                            .unwrap();
                         self.backend.rands_free_ct(&mut seal_state);
                         let mut states = states.write().await;
                         states[batch_idx] = Some(seal_state);
@@ -507,10 +509,14 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
                     while let Some((batch_idx, mut seal_state, a_ct, b_ct)) = recv_1.next().await {
                         let msg = (batch_idx, a_ct);
                         let send_message = MsgSend::new(&msg);
-                        bytes::async_serialize(&mut *writer, &send_message).await.unwrap();
+                        bytes::async_serialize(&mut *writer, &send_message)
+                            .await
+                            .unwrap();
                         let msg = (batch_idx, b_ct);
                         let send_message = MsgSend::new(&msg);
-                        bytes::async_serialize(&mut *writer, &send_message).await.unwrap();
+                        bytes::async_serialize(&mut *writer, &send_message)
+                            .await
+                            .unwrap();
                         self.backend.triples_free_ct(&mut seal_state);
                         let mut states = states.write().await;
                         states[batch_idx] = Some(seal_state);
@@ -569,7 +575,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
     ) -> Vec<AuthAdditiveShare<Fp64<P>>>
     where
         R: Read + Send + Unpin,
-        W: Write + Send+ Unpin,
+        W: Write + Send + Unpin,
         RNG: RngCore + CryptoRng,
     {
         let start_time = timer_start!(|| "Server pairwise randomness generation");
@@ -973,8 +979,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
         num: usize,
     ) -> Vec<AuthAdditiveShare<Fp64<P>>> {
         let start_time = timer_start!(|| "Insecure Client pairwise randomness generation");
-        let recv_message: InsecureRandsRcv<Fp64<_>> =
-            bytes::deserialize(&mut *reader).unwrap();
+        let recv_message: InsecureRandsRcv<Fp64<_>> = bytes::deserialize(&mut *reader).unwrap();
         let result = recv_message.msg();
         timer_end!(start_time);
         result
@@ -988,8 +993,7 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>>
         num: usize,
     ) -> Vec<Triple<Fp64<P>>> {
         let start_time = timer_start!(|| "Insecure Client triples generation");
-        let recv_message: InsecureTriplesRcv<Fp64<_>> =
-            bytes::deserialize(&mut *reader).unwrap();
+        let recv_message: InsecureTriplesRcv<Fp64<_>> = bytes::deserialize(&mut *reader).unwrap();
         let result = recv_message.msg();
         timer_end!(start_time);
         result
@@ -1060,15 +1064,15 @@ mod tests {
     use super::*;
     use crate::{ClientKeySend, ServerKeyRcv};
     use algebra::{fields::near_mersenne_64::F, PrimeField, UniformRandom};
+    use async_std::{
+        io::{BufReader, BufWriter, Read, Write},
+        net::{TcpListener, TcpStream},
+    };
     use io_utils::IMuxAsync;
     use protocols_sys::KeyShare;
     use rand::SeedableRng;
     use rand_chacha::ChaChaRng;
     use rayon::prelude::*;
-    use async_std::{
-        io::{BufReader, BufWriter, Read, Write},
-        net::{TcpListener, TcpStream},
-    };
 
     const RANDOMNESS: [u8; 32] = [
         0x99, 0xe0, 0x8f, 0xbc, 0x89, 0xa7, 0x34, 0x01, 0x45, 0x86, 0x82, 0xb6, 0x51, 0xda, 0xf4,
@@ -1076,7 +1080,12 @@ mod tests {
         0x52, 0xd2,
     ];
 
-    fn get_connection(server_addr: &str) -> ((IMuxAsync<impl Read>, IMuxAsync<impl Write>), (IMuxAsync<impl Read>, IMuxAsync<impl Write>)) {
+    fn get_connection(
+        server_addr: &str,
+    ) -> (
+        (IMuxAsync<impl Read>, IMuxAsync<impl Write>),
+        (IMuxAsync<impl Read>, IMuxAsync<impl Write>),
+    ) {
         crossbeam::thread::scope(|s| {
             let server_io = s.spawn(|_| {
                 task::block_on(async {
@@ -1097,7 +1106,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             let client_io = s.spawn(|_| {
                 task::block_on(async {
-                    let stream = TcpStream::connect(server_addr).await.expect("Client connection failed!");
+                    let stream = TcpStream::connect(server_addr)
+                        .await
+                        .expect("Client connection failed!");
                     let read_stream = IMuxAsync::new(vec![BufReader::new(stream.clone())]);
                     let write_stream = IMuxAsync::new(vec![BufWriter::new(stream)]);
                     (read_stream, write_stream)
@@ -1122,8 +1133,7 @@ mod tests {
                 // Keygen
                 let mac_key = F::uniform(&mut rng);
                 let key_recv = timer_start!(|| "Receiving Keys");
-                let recv_message: ServerKeyRcv =
-                    bytes::deserialize(&mut server_read).unwrap();
+                let recv_message: ServerKeyRcv = bytes::deserialize(&mut server_read).unwrap();
                 let mut key_share = KeyShare::new();
                 let sfhe = key_share.receive(recv_message.msg());
                 timer_end!(key_recv);
@@ -1131,7 +1141,7 @@ mod tests {
                 // Generate rands
                 let server_gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(rayon::current_num_threads()/2)
+                    .num_threads(rayon::current_num_threads() / 2)
                     .build()
                     .unwrap();
                 pool.install(|| {
@@ -1158,7 +1168,7 @@ mod tests {
                 // Generate rands
                 let client_gen = ClientOfflineMPC::<F, _>::new(&cfhe);
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(rayon::current_num_threads()/2)
+                    .num_threads(rayon::current_num_threads() / 2)
                     .build()
                     .unwrap();
                 pool.install(|| {
@@ -1187,8 +1197,7 @@ mod tests {
                 // Keygen
                 let mac_key = F::uniform(&mut rng);
                 let key_recv = timer_start!(|| "Receiving Keys");
-                let recv_message: ServerKeyRcv =
-                    bytes::deserialize(&mut server_read).unwrap();
+                let recv_message: ServerKeyRcv = bytes::deserialize(&mut server_read).unwrap();
                 let mut key_share = KeyShare::new();
                 let sfhe = key_share.receive(recv_message.msg());
                 timer_end!(key_recv);
@@ -1196,7 +1205,7 @@ mod tests {
                 // Generate triples
                 let server_gen = ServerOfflineMPC::<F, _>::new(&sfhe, mac_key.into_repr().0);
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(rayon::current_num_threads()/2)
+                    .num_threads(rayon::current_num_threads() / 2)
                     .build()
                     .unwrap();
                 pool.install(|| {
@@ -1223,7 +1232,7 @@ mod tests {
                 // Generate triples
                 let client_gen = ClientOfflineMPC::<F, _>::new(&cfhe);
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(rayon::current_num_threads()/2)
+                    .num_threads(rayon::current_num_threads() / 2)
                     .build()
                     .unwrap();
                 pool.install(|| {

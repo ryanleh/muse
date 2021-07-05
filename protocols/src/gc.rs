@@ -15,16 +15,13 @@ use crypto_primitives::{
     },
     AuthShare, Share,
 };
-use io_utils::IMuxAsync;
+use io_utils::imux::IMuxAsync;
 use itertools::interleave;
 use protocols_sys::{ClientFHE, ServerFHE};
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use scuttlebutt::Block;
-use std::{
-    convert::TryFrom,
-    marker::PhantomData,
-};
+use std::{convert::TryFrom, marker::PhantomData};
 
 use async_std::io::{Read, Write};
 
@@ -100,7 +97,11 @@ where
         make_relu::<P>().num_evaluator_inputs()
     }
 
-    pub fn offline_server_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+    pub fn offline_server_protocol<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: CryptoRng + RngCore,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         number_of_relus: usize,
@@ -243,7 +244,11 @@ where
         })
     }
 
-    pub fn offline_client_protocol<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
+    pub fn offline_client_protocol<
+        R: Read + Send + Unpin,
+        W: Write + Send + Unpin,
+        RNG: CryptoRng + RngCore,
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         number_of_relus: usize,
@@ -294,7 +299,7 @@ where
 
         // Receive carry labels
         let recv_time = timer_start!(|| "Receiving carry labels");
-        
+
         let recv_msg: ClientLabelMsgRcv = bytes::deserialize(reader)?;
         let carry_labels: Vec<Wire> = recv_msg.msg().remove(0);
 
