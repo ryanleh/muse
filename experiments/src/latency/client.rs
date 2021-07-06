@@ -49,9 +49,11 @@ pub fn client_connect(
     })
 }
 
-pub fn client_connect_2(
+pub fn client_connect_3(
     addr: &str,
 ) -> (
+    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
+    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
     IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
@@ -62,6 +64,8 @@ pub fn client_connect_2(
     let mut writers = Vec::with_capacity(16);
     let mut readers_2 = Vec::with_capacity(16);
     let mut writers_2 = Vec::with_capacity(16);
+    let mut readers_3 = Vec::with_capacity(16);
+    let mut writers_3 = Vec::with_capacity(16);
     task::block_on(async {
         for _ in 0..16 {
             let stream = TcpStream::connect(addr).await.unwrap();
@@ -73,8 +77,14 @@ pub fn client_connect_2(
             readers_2.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_2.push(CountingIO::new(BufWriter::new(stream)));
         }
+        for _ in 0..16 {
+            let stream = TcpStream::connect(addr).await.unwrap();
+            readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
+            writers_3.push(CountingIO::new(BufWriter::new(stream)));
+        }
         (IMuxAsync::new(readers), IMuxAsync::new(writers),
-         IMuxAsync::new(readers_2), IMuxAsync::new(writers_2))
+         IMuxAsync::new(readers_2), IMuxAsync::new(writers_2),
+         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3))
     })
 }
 
@@ -92,9 +102,9 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
         .for_each(|in_i| *in_i = generate_random_number(rng).1);
 
     let (client_state, offline_read, offline_write) = {
-        let (mut reader, mut writer, mut reader_2, mut writer_2) = client_connect_2(server_addr);
+        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, _) = client_connect_3(server_addr);
         (
-            NNProtocol::offline_client_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &architecture, rng, rng_2)
+            NNProtocol::offline_client_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut reader_3, &architecture, rng, rng_2)
                 .unwrap(),
             reader.count(),
             writer.count(),
@@ -126,50 +136,6 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
     ));
 }
 
-pub fn end_test<R: RngCore + CryptoRng + Send>(
-    server_addr: &str,
-    num_triples: usize,
-    num_rand: usize,
-    rng: &mut R,
-) {
-    use protocols::server_keygen;
-    use protocols_sys::{SealCT, SerialCT};
-
-    let (mut reader, mut writer, mut reader_2, mut writer_2) = client_connect_2(server_addr);
-
-    // Keygen
-    let cfhe = client_keygen(&mut writer).unwrap();
-    writer.reset();
-
-    // Generate triples
-    let _ = rayon::scope(|s| {
-        let cfhe_ref = &cfhe;
-        let cfhe_ref2 = &cfhe;
-
-        use rand::SeedableRng;
-
-        s.spawn(move |_| {
-            let mut rng = &mut rand::ChaChaRng::from_seed([0; 32]);
-            let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
-            pool.install(|| {
-                let client_gen = ClientOfflineMPC::<F, _>::new(cfhe_ref);
-                let triples = timer_start!(|| "Generating triples");
-                client_gen.triples_gen(&mut reader, &mut writer, rng, num_triples);
-                timer_end!(triples);
-            });
-        });
-
-        s.spawn(move |_| {
-            let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
-            pool.install(|| {
-                let client_gen = ClientOfflineMPC::<F, _>::new(&cfhe_ref2);
-                let triples = timer_start!(|| "Generating triples2");
-                client_gen.triples_gen(&mut reader_2, &mut writer_2, rng, num_triples);
-                timer_end!(triples);
-            });
-        });
-    });
-}
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
 pub fn acg<R: RngCore + CryptoRng>(
@@ -309,12 +275,18 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let modulus_bits = <F as PrimeField>::size_in_bits();
     let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
 
-    let out_mac_shares = vec![F::zero(); activations];
+    // TODO: Explain
+    let out_mac_shares = vec![F::zero(); 2 * activations];
     let out_shares_bits = vec![F::zero(); activations * modulus_bits];
-    let inp_mac_shares = vec![F::zero(); activations];
+    let inp_mac_shares = vec![F::zero(); 2 * activations];
     let inp_rands_bits = vec![F::zero(); activations * modulus_bits];
 
-    let num_rands = 2 * (activations + activations * modulus_bits);
+    let (num_rands, _) = CDSProtocol::<TenBitExpParams>::num_rands_triples(
+        layers.len(),
+        activations,
+        modulus_bits,
+        elems_per_label
+    );
 
     // Generate rands
     let gen = ClientOfflineMPC::new(&cfhe);
@@ -322,7 +294,7 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let input_time = timer_start!(|| "Input Auth");
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
     let mut mpc = ClientMPC::new(rands, Vec::new());
-
+    
     // Share inputs
     let share_time = timer_start!(|| "Client receiving inputs");
     let s_out_mac_keys = mpc
@@ -332,10 +304,10 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .recv_private_inputs(&mut reader, &mut writer, layers.len())
         .unwrap();
     let s_out_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
+        .recv_private_inputs(&mut reader, &mut writer, 2 * activations)
         .unwrap();
     let s_inp_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
+        .recv_private_inputs(&mut reader, &mut writer, 2 * activations)
         .unwrap();
     let zero_labels = mpc
         .recv_private_inputs(
@@ -375,120 +347,6 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         writer.count()
     ));
 }
-
-//pub fn async_input_auth<R: RngCore + CryptoRng>(
-//    server_addr: &str,
-//    server_addr_2: &str,
-//    layers: &[usize],
-//    rng: &mut R,
-//) {
-//    use protocols::async_server_keygen;
-//    use protocols_sys::{SealCT, SerialCT};
-//
-//    let (mut sync_reader, mut sync_writer) = client_connect_sync(server_addr);
-//
-//    // Give server time to start async listener
-//    std::thread::sleep_ms(1000);
-//
-//    let (mut reader, mut writer) =
-//        task::block_on(async { client_connect_async(server_addr).await });
-//
-//    // Keygen
-//    let (cfhe, mut sfhe) = task::block_on(async {
-//        (
-//            async_client_keygen(&mut writer).await.unwrap(),
-//            async_server_keygen(&mut reader).await.unwrap(),
-//        )
-//    });
-//    writer.reset();
-//
-//    // Generate dummy labels/layer for CDS
-//    let activations: usize = layers.iter().map(|e| *e).sum();
-//    let modulus_bits = <F as PrimeField>::size_in_bits();
-//    let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
-//
-//    let out_mac_shares = vec![F::zero(); activations];
-//    let out_shares_bits = vec![F::zero(); activations * modulus_bits];
-//    let inp_mac_shares = vec![F::zero(); activations];
-//    let inp_rands_bits = vec![F::zero(); activations * modulus_bits];
-//
-//    let num_rands = 2 * (activations + activations * modulus_bits);
-//
-//    // Generate rands
-//    let gen = ClientOfflineMPC::new(&cfhe);
-//
-//    let input_time = timer_start!(|| "Input Auth");
-//    let rands = gen.async_rands_gen(&mut reader, &mut writer, rng, num_rands);
-//    let mut mpc = ClientMPC::new(rands, Vec::new());
-//
-//    // Share inputs
-//    let share_time = timer_start!(|| "Client receiving inputs");
-//    let s_out_mac_keys = mpc
-//        .recv_private_inputs(&mut sync_reader, &mut sync_writer, layers.len())
-//        .unwrap();
-//    let s_inp_mac_keys = mpc
-//        .recv_private_inputs(&mut sync_reader, &mut sync_writer, layers.len())
-//        .unwrap();
-//    let s_out_mac_shares = mpc
-//        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
-//        .unwrap();
-//    let s_inp_mac_shares = mpc
-//        .recv_private_inputs(&mut sync_reader, &mut sync_writer, activations)
-//        .unwrap();
-//    let zero_labels = mpc
-//        .recv_private_inputs(
-//            &mut sync_reader,
-//            &mut sync_writer,
-//            2 * activations * modulus_bits * elems_per_label,
-//        )
-//        .unwrap();
-//    let one_labels = mpc
-//        .recv_private_inputs(
-//            &mut sync_reader,
-//            &mut sync_writer,
-//            2 * activations * modulus_bits * elems_per_label,
-//        )
-//        .unwrap();
-//    timer_end!(share_time);
-//
-//    // Receive client shares
-//    let recv_time = timer_start!(|| "Client sending inputs");
-//    let out_bits = mpc
-//        .private_inputs(
-//            &mut sync_reader,
-//            &mut sync_writer,
-//            out_shares_bits.as_slice(),
-//            rng,
-//        )
-//        .unwrap();
-//    let inp_bits = mpc
-//        .private_inputs(
-//            &mut sync_reader,
-//            &mut sync_writer,
-//            inp_rands_bits.as_slice(),
-//            rng,
-//        )
-//        .unwrap();
-//    let c_out_mac_shares = mpc
-//        .private_inputs(
-//            &mut sync_reader,
-//            &mut sync_writer,
-//            out_mac_shares.as_slice(),
-//            rng,
-//        )
-//        .unwrap();
-//    let c_inp_mac_shares = mpc
-//        .private_inputs(
-//            &mut sync_reader,
-//            &mut sync_writer,
-//            inp_mac_shares.as_slice(),
-//            rng,
-//        )
-//        .unwrap();
-//    timer_end!(recv_time);
-//    timer_end!(input_time);
-//    add_to_trace!(|| "Bytes written: ", || format!("{}", writer.count()));
-//}
 
 //pub fn input_auth_ltme<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
 //    use protocols::server_keygen;

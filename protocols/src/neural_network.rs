@@ -216,9 +216,11 @@ where
         writer: &mut IMuxAsync<W>,
         reader_2: &mut IMuxAsync<R>,
         writer_2: &mut IMuxAsync<W>,
+        writer_3: &mut IMuxAsync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
         rng_2: &mut RNG,
+        rng_3: &mut RNG,
     ) -> Result<ServerState<P>, MpcError> {
         let sfhe: ServerFHE = crate::server_keygen(reader)?;
         
@@ -298,30 +300,32 @@ where
                     // Input rands
                     rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
 
-                    // ACG/Garbling
-                    let result = NNProtocol::offline_server_acg(
-                        reader_2,
-                        writer_2,
-                        &sfhe,
-                        neural_network,
-                        rng_2,
-                    ).unwrap();
-                    linear_shares = result.0;
-                    mac_keys = result.1;
-        
-                    // TODO: Add timing stuff
-                    let result = ReluProtocol::<P>::offline_server_garbling(
-                        reader_2,
-                        writer_2,
-                        num_relu,
-                        &sfhe,
-                        relu_layer_sizes.as_slice(),
-                        output_truncations.as_slice(),
-                        rng_2,
-                    ).unwrap();
-                    gc_state = Some(result.0);
-                    labels = result.1;
-
+                    rayon::scope(|s| {
+                        s.spawn(|_| {
+                            // ACG/Garbling
+                            let result = NNProtocol::offline_server_acg(
+                                reader_2,
+                                writer_2,
+                                &sfhe,
+                                neural_network,
+                                rng_2,
+                            ).unwrap();
+                            linear_shares = result.0;
+                            mac_keys = result.1;
+                        });
+                        
+                        // TODO: Add timing stuff
+                        let result = ReluProtocol::<P>::offline_server_garbling(
+                            writer_3,
+                            num_relu,
+                            &sfhe,
+                            relu_layer_sizes.as_slice(),
+                            output_truncations.as_slice(),
+                            rng_3,
+                        ).unwrap();
+                        gc_state = Some(result.0);
+                        labels = result.1;
+                    });
                 });
             });
         });
@@ -496,6 +500,7 @@ where
         writer: &mut IMuxAsync<W>,
         reader_2: &mut IMuxAsync<R>,
         writer_2: &mut IMuxAsync<W>,
+        reader_3: &mut IMuxAsync<R>,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
         rng_2: &mut RNG,
@@ -557,22 +562,25 @@ where
                     // Input rands
                     rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
 
-                    // ACG/Garbling
-                    let result = NNProtocol::offline_client_acg(
-                        reader_2,
-                        writer_2,
-                        &cfhe,
-                        neural_network_architecture,
-                        rng_2
-                    ).unwrap();
-                    in_shares = result.0;
-                    out_shares = result.1;
-        
-                    // TODO
-                    gc_state = Some(ReluProtocol::<P>::offline_client_garbling(
-                        reader_2,
-                        num_relu,
-                    ).unwrap());
+                    rayon::scope(|s| {
+                        s.spawn(|_| {
+                            // ACG/Garbling
+                            let result = NNProtocol::offline_client_acg(
+                                reader_2,
+                                writer_2,
+                                &cfhe,
+                                neural_network_architecture,
+                                rng_2
+                            ).unwrap();
+                            in_shares = result.0;
+                            out_shares = result.1;
+                        });
+                        // TODO
+                        gc_state = Some(ReluProtocol::<P>::offline_client_garbling(
+                            reader_3,
+                            num_relu,
+                        ).unwrap());
+                    });
                });
             });
         });

@@ -54,6 +54,11 @@ pub type InsecureBlockRcv = InMessage<Vec<Block>, InsecureCDSType>;
 ///     * (128/field_modulus) multiplications are needed for every bit of the
 ///       input and output shares
 ///     * One multiplication is needed for every input and output share
+///
+/// TODO: For full security the client would input both ACG outputs, and the MAC check
+///       slightly changes to include the second MAC check. The performance impact
+///       of this is negligble (we do, however, generate the correct amount of input
+///       randomness since this is non-negl.)
 impl<P: FixedPointParameters, F: Fp64Parameters> CDSProtocol<P>
 where
     <P::Field as PrimeField>::Params: Fp64Parameters,
@@ -71,11 +76,8 @@ where
         modulus_bits: usize,
         elems_per_label: usize,
     ) -> (usize, usize) {
-        let rands = 2
-            * (num_layers
-                + 2 * total_size
-                + total_size * modulus_bits
-                + 2 * (modulus_bits * total_size * elems_per_label));
+        // TODO: Explain
+        let rands = 2 * (2 * total_size + total_size * modulus_bits);
         let triples = 2
             * (
                 total_size * modulus_bits   // Check that Client's input is bits
@@ -213,7 +215,6 @@ where
         labels: &[(Block, Block)],
         rng: &mut RNG,
     ) -> Result<(), MpcError> {
-        // TODO: Generate triples in background during linear layers
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         let total_size = out_mac_shares.len();
         let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;

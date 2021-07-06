@@ -61,9 +61,11 @@ pub fn server_connect(
     })
 }
 
-pub fn server_connect_2(
+pub fn server_connect_3(
     addr: &str,
 ) -> (
+    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
+    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
     IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
@@ -77,6 +79,8 @@ pub fn server_connect_2(
         let mut writers = Vec::with_capacity(16);
         let mut readers_2 = Vec::with_capacity(16);
         let mut writers_2 = Vec::with_capacity(16);
+        let mut readers_3 = Vec::with_capacity(16);
+        let mut writers_3 = Vec::with_capacity(16);
         for _ in 0..16 {
             let stream = incoming.next().await.unwrap().unwrap();
             readers.push(CountingIO::new(BufReader::new(stream.clone())));
@@ -87,8 +91,14 @@ pub fn server_connect_2(
             readers_2.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_2.push(CountingIO::new(BufWriter::new(stream)));
         }
+        for _ in 0..16 {
+            let stream = incoming.next().await.unwrap().unwrap();
+            readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
+            writers_3.push(CountingIO::new(BufWriter::new(stream)));
+        }
         (IMuxAsync::new(readers), IMuxAsync::new(writers),
-         IMuxAsync::new(readers_2), IMuxAsync::new(writers_2))
+         IMuxAsync::new(readers_2), IMuxAsync::new(writers_2),
+         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3))
     })
 }
 
@@ -97,11 +107,12 @@ pub fn nn_server<R: RngCore + CryptoRng + Send>(
     nn: NeuralNetwork<TenBitAS, TenBitExpFP>,
     rng: &mut R,
     rng_2: &mut R,
+    rng_3: &mut R,
 ) {
     let (server_offline_state, offline_read, offline_write) = {
-        let (mut reader, mut writer, mut reader_2, mut writer_2) = server_connect_2(server_addr);
+        let (mut reader, mut writer, mut reader_2, mut writer_2, _, mut writer_3) = server_connect_3(server_addr);
         (
-            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &nn, rng, rng_2).unwrap(),
+            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut writer_3, &nn, rng, rng_2, rng_3).unwrap(),
             reader.count(),
             writer.count(),
         )
@@ -129,48 +140,6 @@ pub fn nn_server<R: RngCore + CryptoRng + Send>(
         "Read {} bytes\nWrote {} bytes",
         online_read, online_write
     ));
-}
-
-pub fn end_test<R: RngCore + CryptoRng + Send>(
-    server_addr: &str,
-    num_triples: usize,
-    num_rand: usize,
-    rng: &mut R,
-) {
-    let (mut reader, mut writer, mut reader_2, mut writer_2) = server_connect_2(server_addr);
-
-    // Keygen
-    let sfhe = server_keygen(&mut reader).unwrap();
-    let mac_key = F::uniform(rng);
-    reader.reset();
-
-    let _ = rayon::scope(|s| {
-        let sfhe_ref = &sfhe;
-        let sfhe_ref2 = &sfhe;
-
-        use rand::SeedableRng;
-
-        s.spawn(move |_| {
-            let mut rng = &mut rand::ChaChaRng::from_seed([0; 32]);
-            let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
-            pool.install(|| {
-                let server_gen = ServerOfflineMPC::<F, _>::new(sfhe_ref, mac_key.into_repr().0);
-                let triples = timer_start!(|| "Generating triples");
-                server_gen.triples_gen(&mut reader, &mut writer, rng, num_triples);
-                timer_end!(triples);
-            });
-        });
-
-        s.spawn(move |_| {
-            let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
-            pool.install(|| {
-                let server_gen = ServerOfflineMPC::<F, _>::new(sfhe_ref2, mac_key.into_repr().0);
-                let triples = timer_start!(|| "Generating triples2");
-                server_gen.triples_gen(&mut reader_2, &mut writer_2, rng, num_triples);
-                timer_end!(triples);
-            });
-        });
-    });
 }
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
@@ -213,7 +182,6 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
 
     let garble_time = timer_start!(|| "Garbling Time");
     let _ = protocols::gc::ReluProtocol::<TenBitExpParams>::offline_server_garbling(
-        &mut reader,
         &mut writer,
         activations,
         &sfhe,
@@ -317,13 +285,18 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
 
     let out_mac_keys = vec![F::zero(); layers.len()];
-    let out_mac_shares = vec![F::zero(); activations];
+    let out_mac_shares = vec![F::zero(); 2 * activations];
     let inp_mac_keys = vec![F::zero(); layers.len()];
-    let inp_mac_shares = vec![F::zero(); activations];
+    let inp_mac_shares = vec![F::zero(); 2 * activations];
     let zero_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
     let one_labels = vec![F::zero(); 2 * activations * modulus_bits * elems_per_label];
 
-    let num_rands = 2 * (activations + activations * modulus_bits);
+    let (num_rands, _) = CDSProtocol::<TenBitExpParams>::num_rands_triples(
+        layers.len(),
+        activations,
+        modulus_bits,
+        elems_per_label
+    );
 
     // Generate rands
     let mac_key = F::uniform(rng);
@@ -364,10 +337,10 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         .recv_private_inputs(&mut reader, &mut writer, activations * modulus_bits)
         .unwrap();
     let c_out_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
+        .recv_private_inputs(&mut reader, &mut writer, 2 * activations)
         .unwrap();
     let c_inp_mac_shares = mpc
-        .recv_private_inputs(&mut reader, &mut writer, activations)
+        .recv_private_inputs(&mut reader, &mut writer, 2 * activations)
         .unwrap();
     timer_end!(recv_time);
     timer_end!(input_time);

@@ -157,11 +157,9 @@ where
     }
 
     pub fn offline_server_garbling<
-        R: Read + Send + Unpin,
         W: Write + Send + Unpin,
         RNG: CryptoRng + RngCore,
     >(
-        reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         number_of_relus: usize,
         sfhe: &ServerFHE,
