@@ -272,7 +272,8 @@ where
 
         // TODO
         let mac_key = P::Field::uniform(rng);
-        let gen = crate::mpc_offline::InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
+        //let gen = crate::mpc_offline::InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
+        let gen = crate::mpc_offline::ServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
 
         let mut linear_shares = BTreeMap::new();
         let mut mac_keys = BTreeMap::new();
@@ -531,7 +532,8 @@ where
         );
         
         // Generate rands and triples
-        let gen = InsecureClientOfflineMPC::new(&cfhe);
+        //let gen = InsecureClientOfflineMPC::new(&cfhe);
+        let gen = ClientOfflineMPC::new(&cfhe);
 
         let mut in_shares = BTreeMap::new();
         let mut out_shares = BTreeMap::new();
