@@ -32,7 +32,11 @@ use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use scuttlebutt::Block;
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, Condvar},
+};
+
 
 use async_std::{
     io::{BufReader, BufWriter, Write},
@@ -61,9 +65,11 @@ pub fn server_connect(
     })
 }
 
-pub fn server_connect_3(
+pub fn server_connect_4(
     addr: &str,
 ) -> (
+    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
+    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
     IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
@@ -81,6 +87,8 @@ pub fn server_connect_3(
         let mut writers_2 = Vec::with_capacity(16);
         let mut readers_3 = Vec::with_capacity(16);
         let mut writers_3 = Vec::with_capacity(16);
+        let mut readers_4 = Vec::with_capacity(16);
+        let mut writers_4 = Vec::with_capacity(16);
         for _ in 0..16 {
             let stream = incoming.next().await.unwrap().unwrap();
             readers.push(CountingIO::new(BufReader::new(stream.clone())));
@@ -96,9 +104,15 @@ pub fn server_connect_3(
             readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_3.push(CountingIO::new(BufWriter::new(stream)));
         }
+        for _ in 0..16 {
+            let stream = incoming.next().await.unwrap().unwrap();
+            readers_4.push(CountingIO::new(BufReader::new(stream.clone())));
+            writers_4.push(CountingIO::new(BufWriter::new(stream)));
+        }
         (IMuxAsync::new(readers), IMuxAsync::new(writers),
          IMuxAsync::new(readers_2), IMuxAsync::new(writers_2),
-         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3))
+         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3),
+         IMuxAsync::new(readers_4), IMuxAsync::new(writers_4))
     })
 }
 
@@ -108,11 +122,12 @@ pub fn nn_server<R: RngCore + CryptoRng + Send>(
     rng: &mut R,
     rng_2: &mut R,
     rng_3: &mut R,
+    rng_4: &mut R,
 ) {
     let (server_offline_state, offline_read, offline_write) = {
-        let (mut reader, mut writer, mut reader_2, mut writer_2, _, mut writer_3) = server_connect_3(server_addr);
+        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3, _, mut writer_4) = server_connect_4(server_addr);
         (
-            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut writer_3, &nn, rng, rng_2, rng_3).unwrap(),
+            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut reader_3, &mut writer_3, &mut writer_4, &nn, rng, rng_2, rng_3, rng_4).unwrap(),
             reader.count(),
             writer.count(),
         )
@@ -246,7 +261,11 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
     let gen = InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
     let triples = gen.triples_gen(&mut reader, &mut writer, rng, num_triples);
-    let mut mpc = ServerMPC::new(rands, triples, mac_key);
+    let mut mpc = ServerMPC::new(
+        rands,
+        Arc::new((Mutex::new(triples), Condvar::new())),
+        mac_key
+    );
 
     // Generate triples
     protocols::cds::CDSProtocol::<TenBitExpParams>::server_cds(
@@ -304,7 +323,11 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     let input_time = timer_start!(|| "Input Auth");
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
-    let mut mpc = ServerMPC::new(rands, Vec::new(), mac_key);
+    let mut mpc = ServerMPC::new(
+        rands,
+        Arc::new((Mutex::new(Vec::new()), Condvar::new())),
+        mac_key
+    );
 
     // Share inputs
     let share_time = timer_start!(|| "Server sharing inputs");

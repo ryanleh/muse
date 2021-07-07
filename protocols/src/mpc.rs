@@ -11,6 +11,9 @@ use itertools::izip;
 use num_traits::identities::Zero;
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
+use std::{
+    sync::{Arc, Mutex, Condvar},
+};
 
 pub struct MpcProtocolType;
 
@@ -270,30 +273,34 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
     /// Returns number of available rands
     fn num_rands(&self) -> usize;
 
-    /// Returns `num` triples if available
+    /// Blocks until `num` triples are available and returns them.
     fn get_triples(&mut self, num: usize) -> Result<Vec<Triple<T>>, MpcError>;
 
-    /// Returns `num` rands if available
+    /// Blocks until `num` rands are available and returns them.
     fn get_rands(&mut self, num: usize) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
 }
 
 /// Client MPC instance
 pub struct ClientMPC<T: AuthShare> {
     rands: Vec<AuthAdditiveShare<T>>,
-    triples: Vec<Triple<T>>,
+    triples: Arc<(Mutex<Vec<Triple<T>>>, Condvar)>,
 }
+
 
 /// Server MPC instance
 pub struct ServerMPC<T: AuthShare> {
     rands: Vec<AuthAdditiveShare<T>>,
-    triples: Vec<Triple<T>>,
+    triples: Arc<(Mutex<Vec<Triple<T>>>, Condvar)>,
     mac_key: <T as Share>::Ring,
     /// Opened auth_shares with unchecked MACs
     unchecked: Vec<AuthAdditiveShare<T>>,
 }
 
 impl<P: Fp64Parameters> ClientMPC<Fp64<P>> {
-    pub fn new(rands: Vec<AuthAdditiveShare<Fp64<P>>>, triples: Vec<Triple<Fp64<P>>>) -> Self {
+    pub fn new(
+        rands: Vec<AuthAdditiveShare<Fp64<P>>>,
+        triples: Arc<(Mutex<Vec<Triple<Fp64<P>>>>, Condvar)>,
+    ) -> Self {
         Self { rands, triples }
     }
 }
@@ -301,7 +308,7 @@ impl<P: Fp64Parameters> ClientMPC<Fp64<P>> {
 impl<P: Fp64Parameters> ServerMPC<Fp64<P>> {
     pub fn new(
         rands: Vec<AuthAdditiveShare<Fp64<P>>>,
-        triples: Vec<Triple<Fp64<P>>>,
+        triples: Arc<(Mutex<Vec<Triple<Fp64<P>>>>, Condvar)>,
         mac_key: <Fp64<P> as Share>::Ring,
     ) -> Self {
         Self {
@@ -429,24 +436,25 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     }
 
     fn num_triples(&self) -> usize {
-        self.triples.len()
+        self.triples.0.lock().unwrap().len()
     }
 
     fn num_rands(&self) -> usize {
         self.rands.len()
     }
-
+    
     fn get_triples(&mut self, num: usize) -> Result<Vec<Triple<Fp64<P>>>, MpcError> {
-        if self.triples.len() < num {
-            return Err(MpcError::InsufficientTriples {
-                num: self.triples.len(),
-                needed: num,
-            });
-        }
-        Ok(self.triples.split_off(self.triples.len() - num))
+        // Wait until the lock is free and there are enough triples
+        let (mutex, cvar) = &*self.triples;
+        let mut triples = cvar.wait_while(
+            mutex.lock().unwrap(),
+            |triples| triples.len() < num
+        ).unwrap();
+
+        let cur_length = triples.len();
+        Ok(triples.split_off(cur_length - num))
     }
 
-    /// Returns `num` rands if available
     fn get_rands(&mut self, num: usize) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         if self.rands.len() < num {
             return Err(MpcError::InsufficientRand {
@@ -563,24 +571,25 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     }
 
     fn num_triples(&self) -> usize {
-        self.triples.len()
+        self.triples.0.lock().unwrap().len()
     }
 
     fn num_rands(&self) -> usize {
         self.rands.len()
     }
-
+    
     fn get_triples(&mut self, num: usize) -> Result<Vec<Triple<Fp64<P>>>, MpcError> {
-        if self.triples.len() < num {
-            return Err(MpcError::InsufficientTriples {
-                num: self.triples.len(),
-                needed: num,
-            });
-        }
-        Ok(self.triples.split_off(self.triples.len() - num))
+        // Wait until the lock is free and there are enough triples
+        let (mutex, cvar) = &*self.triples;
+        let mut triples = cvar.wait_while(
+            mutex.lock().unwrap(),
+            |triples| triples.len() < num
+        ).unwrap();
+
+        let cur_length = triples.len();
+        Ok(triples.split_off(cur_length - num))
     }
 
-    /// Returns `num` rands if available
     fn get_rands(&mut self, num: usize) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         if self.rands.len() < num {
             return Err(MpcError::InsufficientRand {

@@ -211,7 +211,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ClientOfflineMPC<Fp64<P>, SealCl
 
         // Calculate number of batches to send per thread
         let batches = (num as f64 / Self::BATCH_SIZE as f64).ceil() as usize;
-        let num_threads = min(batches, rayon::current_num_threads() - 1);
+        // TODO
+        let num_threads = min(batches, rayon::current_num_threads() - 2);
         let batches_per_thread = (batches as f64 / num_threads as f64).ceil() as usize;
 
         // Final result vector
@@ -583,7 +584,8 @@ impl<P: Fp64Parameters> OfflineMPC<Fp64<P>> for ServerOfflineMPC<Fp64<P>, SealSe
 
         // Calculate number of batches to send per thread
         let batches = (num as f64 / Self::BATCH_SIZE as f64).ceil() as usize;
-        let num_threads = min(batches, rayon::current_num_threads() - 1);
+        // TODO
+        let num_threads = min(batches, rayon::current_num_threads() - 2);
         let batches_per_thread = (batches as f64 / num_threads as f64).ceil() as usize;
 
         let pre_time = timer_start!(|| "Preprocessing");
