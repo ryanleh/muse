@@ -65,11 +65,9 @@ pub fn server_connect(
     })
 }
 
-pub fn server_connect_4(
+pub fn server_connect_3(
     addr: &str,
 ) -> (
-    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
-    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
     IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
@@ -87,8 +85,6 @@ pub fn server_connect_4(
         let mut writers_2 = Vec::with_capacity(16);
         let mut readers_3 = Vec::with_capacity(16);
         let mut writers_3 = Vec::with_capacity(16);
-        let mut readers_4 = Vec::with_capacity(16);
-        let mut writers_4 = Vec::with_capacity(16);
         for _ in 0..16 {
             let stream = incoming.next().await.unwrap().unwrap();
             readers.push(CountingIO::new(BufReader::new(stream.clone())));
@@ -104,15 +100,9 @@ pub fn server_connect_4(
             readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_3.push(CountingIO::new(BufWriter::new(stream)));
         }
-        for _ in 0..16 {
-            let stream = incoming.next().await.unwrap().unwrap();
-            readers_4.push(CountingIO::new(BufReader::new(stream.clone())));
-            writers_4.push(CountingIO::new(BufWriter::new(stream)));
-        }
         (IMuxAsync::new(readers), IMuxAsync::new(writers),
          IMuxAsync::new(readers_2), IMuxAsync::new(writers_2),
-         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3),
-         IMuxAsync::new(readers_4), IMuxAsync::new(writers_4))
+         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3))
     })
 }
 
@@ -122,12 +112,11 @@ pub fn nn_server<R: RngCore + CryptoRng + Send>(
     rng: &mut R,
     rng_2: &mut R,
     rng_3: &mut R,
-    rng_4: &mut R,
 ) {
     let (server_offline_state, offline_read, offline_write) = {
-        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3, _, mut writer_4) = server_connect_4(server_addr);
+        let (mut reader, mut writer, mut reader_2, mut writer_2, _, mut writer_3) = server_connect_3(server_addr);
         (
-            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut reader_3, &mut writer_3, &mut writer_4, &nn, rng, rng_2, rng_3, rng_4).unwrap(),
+            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut writer_3, &nn, rng, rng_2, rng_3).unwrap(),
             reader.count(),
             writer.count(),
         )
