@@ -291,7 +291,7 @@ where
         let mut gc_state = None;
         let _ = rayon::scope(|s| {
             s.spawn(|_| {
-                let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
+                let pool = ThreadPoolBuilder::new().num_threads(6).build().unwrap();
                 pool.install(|| {
                     // Generate triples in batches
                     let batch_size = num_triples / 4;
@@ -310,10 +310,13 @@ where
                 });
             });
             s.spawn(|_| {
-                let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
+                let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
                 pool.install(|| {
                     let mut rands = Vec::new();
                     rayon::scope(|s2| {
+                        // Generate input rands 
+                        rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
+
                         s2.spawn(|_| {
                             // ACG/Garbling
                             let result = NNProtocol::offline_server_acg(
@@ -327,22 +330,17 @@ where
                             mac_keys = result.1;
                         });
 
-                        s2.spawn(|_| {
-                            // TODO: Add timing stuff
-                            let result = ReluProtocol::<P>::offline_server_garbling(
-                                writer_4,
-                                num_relu,
-                                &sfhe,
-                                relu_layer_sizes.as_slice(),
-                                output_truncations.as_slice(),
-                                rng_4,
-                            ).unwrap();
-                            gc_state = Some(result.0);
-                            labels = result.1;
-                        });
-
-                        // Generate input rands 
-                        rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
+                        // TODO: Add timing stuff
+                        let result = ReluProtocol::<P>::offline_server_garbling(
+                            writer_4,
+                            num_relu,
+                            &sfhe,
+                            relu_layer_sizes.as_slice(),
+                            output_truncations.as_slice(),
+                            rng_4,
+                        ).unwrap();
+                        gc_state = Some(result.0);
+                        labels = result.1;
                     });
 
                     // CDS
@@ -579,7 +577,7 @@ where
         let mut gc_state = None;
         let _ = rayon::scope(|s| {
             s.spawn(|_| {
-                let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
+                let pool = ThreadPoolBuilder::new().num_threads(6).build().unwrap();
                 pool.install(|| {
                     // Generate triples in batches
                     let batch_size = num_triples / 4;
@@ -599,10 +597,13 @@ where
             });
 
             s.spawn(|_| {
-                let pool = ThreadPoolBuilder::new().num_threads(5).build().unwrap();
+                let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
                 pool.install(|| {
                     let mut rands = Vec::new();
                     rayon::scope(|s2| {
+                        // Generate input rands
+                        rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
+
                         s2.spawn(|_| {
                             // ACG/Garbling
                             let result = NNProtocol::offline_client_acg(
@@ -617,16 +618,10 @@ where
                             out_shares = result.1;
                         });
 
-                        s2.spawn(|_| {
-                            // TODO
-                            gc_state = Some(
-                                ReluProtocol::<P>::offline_client_garbling(reader_4, num_relu)
-                                    .unwrap(),
-                            );
-                        });
-
-                        // Generate input rands
-                        rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
+                        gc_state = Some(
+                            ReluProtocol::<P>::offline_client_garbling(reader_4, num_relu)
+                                .unwrap(),
+                        );
                     });
 
                     // Preprocessing for next step with ReLUs; if a ReLU is layer i,
