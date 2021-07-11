@@ -58,11 +58,9 @@ pub fn server_connect(
     })
 }
 
-pub fn server_connect_4(
+pub fn server_connect_3(
     addr: &str,
 ) -> (
-    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
-    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
     IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
@@ -80,8 +78,6 @@ pub fn server_connect_4(
         let mut writers_2 = Vec::with_capacity(16);
         let mut readers_3 = Vec::with_capacity(16);
         let mut writers_3 = Vec::with_capacity(16);
-        let mut readers_4 = Vec::with_capacity(16);
-        let mut writers_4 = Vec::with_capacity(16);
         for _ in 0..16 {
             let stream = incoming.next().await.unwrap().unwrap();
             readers.push(CountingIO::new(BufReader::new(stream.clone())));
@@ -97,11 +93,6 @@ pub fn server_connect_4(
             readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_3.push(CountingIO::new(BufWriter::new(stream)));
         }
-        for _ in 0..16 {
-            let stream = incoming.next().await.unwrap().unwrap();
-            readers_4.push(CountingIO::new(BufReader::new(stream.clone())));
-            writers_4.push(CountingIO::new(BufWriter::new(stream)));
-        }
         (
             IMuxAsync::new(readers),
             IMuxAsync::new(writers),
@@ -109,8 +100,6 @@ pub fn server_connect_4(
             IMuxAsync::new(writers_2),
             IMuxAsync::new(readers_3),
             IMuxAsync::new(writers_3),
-            IMuxAsync::new(readers_4),
-            IMuxAsync::new(writers_4),
         )
     })
 }
@@ -121,34 +110,21 @@ pub fn nn_server<R: RngCore + CryptoRng + Send>(
     rng: &mut R,
     rng_2: &mut R,
     rng_3: &mut R,
-    rng_4: &mut R,
 ) {
     let (server_offline_state, offline_read, offline_write) = {
-        let (
-            mut reader,
-            mut writer,
-            mut reader_2,
-            mut writer_2,
-            mut reader_3,
-            mut writer_3,
-            mut reader_4,
-            mut writer_4,
-        ) = server_connect_4(server_addr);
+        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3) =
+            server_connect_3(server_addr);
         (
             NNProtocol::offline_server_protocol(
                 &mut reader,
                 &mut writer,
                 &mut reader_2,
                 &mut writer_2,
-                &mut reader_3,
                 &mut writer_3,
-                &mut reader_4,
-                &mut writer_4,
                 &nn,
                 rng,
                 rng_2,
                 rng_3,
-                rng_4,
             )
             .unwrap(),
             reader.count(),
@@ -251,16 +227,8 @@ pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let (
-        mut reader,
-        mut writer,
-        mut reader_2,
-        mut writer_2,
-        mut reader_3,
-        mut writer_3,
-        mut reader_4,
-        mut writer_4,
-    ) = server_connect_4(server_addr);
+    let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3) =
+        server_connect_3(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -292,21 +260,13 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
     let rands = Arc::new(Mutex::new(rands));
     let triples = Arc::new((Mutex::new(triples), Condvar::new()));
     let mpc = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
-    let mpc_2 = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
-    let mpc_3 = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
 
     // Generate triples
     protocols::cds::CDSProtocol::<TenBitExpParams>::server_cds(
         &mut reader,
         &mut writer,
-        &mut reader_2,
-        &mut writer_2,
-        &mut reader_3,
-        &mut writer_3,
         &sfhe,
         mpc,
-        mpc_2,
-        mpc_3,
         layers,
         &out_mac_keys,
         &out_mac_shares,

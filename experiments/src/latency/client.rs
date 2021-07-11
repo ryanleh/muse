@@ -47,11 +47,9 @@ pub fn client_connect(
     })
 }
 
-pub fn client_connect_4(
+pub fn client_connect_3(
     addr: &str,
 ) -> (
-    IMuxAsync<CountingIO<BufReader<TcpStream>>>,
-    IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
     IMuxAsync<CountingIO<BufWriter<TcpStream>>>,
     IMuxAsync<CountingIO<BufReader<TcpStream>>>,
@@ -66,8 +64,6 @@ pub fn client_connect_4(
     let mut writers_2 = Vec::with_capacity(16);
     let mut readers_3 = Vec::with_capacity(16);
     let mut writers_3 = Vec::with_capacity(16);
-    let mut readers_4 = Vec::with_capacity(16);
-    let mut writers_4 = Vec::with_capacity(16);
     task::block_on(async {
         for _ in 0..16 {
             let stream = TcpStream::connect(addr).await.unwrap();
@@ -84,11 +80,6 @@ pub fn client_connect_4(
             readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_3.push(CountingIO::new(BufWriter::new(stream)));
         }
-        for _ in 0..16 {
-            let stream = TcpStream::connect(addr).await.unwrap();
-            readers_4.push(CountingIO::new(BufReader::new(stream.clone())));
-            writers_4.push(CountingIO::new(BufWriter::new(stream)));
-        }
         (
             IMuxAsync::new(readers),
             IMuxAsync::new(writers),
@@ -96,8 +87,6 @@ pub fn client_connect_4(
             IMuxAsync::new(writers_2),
             IMuxAsync::new(readers_3),
             IMuxAsync::new(writers_3),
-            IMuxAsync::new(readers_4),
-            IMuxAsync::new(writers_4),
         )
     })
 }
@@ -107,7 +96,6 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
     architecture: NeuralArchitecture<TenBitAS, TenBitExpFP>,
     rng: &mut R,
     rng_2: &mut R,
-    rng_3: &mut R,
 ) {
     // Sample a random input.
     let input_dims = architecture.layers.first().unwrap().input_dimensions();
@@ -117,16 +105,8 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
         .for_each(|in_i| *in_i = generate_random_number(rng).1);
 
     let (client_state, offline_read, offline_write) = {
-        let (
-            mut reader,
-            mut writer,
-            mut reader_2,
-            mut writer_2,
-            mut reader_3,
-            mut writer_3,
-            mut reader_4,
-            mut writer_4,
-        ) = client_connect_4(server_addr);
+        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3) =
+            client_connect_3(server_addr);
         (
             NNProtocol::offline_client_protocol(
                 &mut reader,
@@ -134,13 +114,9 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
                 &mut reader_2,
                 &mut writer_2,
                 &mut reader_3,
-                &mut writer_3,
-                &mut reader_4,
-                &mut writer_4,
                 &architecture,
                 rng,
                 rng_2,
-                rng_3,
             )
             .unwrap(),
             reader.count(),
@@ -238,16 +214,8 @@ pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let (
-        mut reader,
-        mut writer,
-        mut reader_2,
-        mut writer_2,
-        mut reader_3,
-        mut writer_3,
-        mut reader_4,
-        mut writer_4,
-    ) = client_connect_4(server_addr);
+    let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3) =
+        client_connect_3(server_addr);
 
     // Keygen
     let cfhe = client_keygen(&mut writer).unwrap();
@@ -279,21 +247,13 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
     let rands = Arc::new(Mutex::new(rands));
     let triples = Arc::new((Mutex::new(triples), Condvar::new()));
     let mpc = ClientMPC::new(rands.clone(), triples.clone());
-    let mpc_2 = ClientMPC::new(rands.clone(), triples.clone());
-    let mpc_3 = ClientMPC::new(rands, triples.clone());
 
     // Generate triples
     protocols::cds::CDSProtocol::<TenBitExpParams>::client_cds(
         &mut reader,
         &mut writer,
-        &mut reader_2,
-        &mut writer_2,
-        &mut reader_3,
-        &mut writer_3,
         &cfhe,
         mpc,
-        mpc_2,
-        mpc_3,
         layers,
         &out_mac_shares,
         &out_shares,

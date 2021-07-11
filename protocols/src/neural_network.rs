@@ -216,15 +216,11 @@ where
         writer: &mut IMuxAsync<W>,
         reader_2: &mut IMuxAsync<R>,
         writer_2: &mut IMuxAsync<W>,
-        reader_3: &mut IMuxAsync<R>,
         writer_3: &mut IMuxAsync<W>,
-        reader_4: &mut IMuxAsync<R>,
-        writer_4: &mut IMuxAsync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
         rng_2: &mut RNG,
         rng_3: &mut RNG,
-        rng_4: &mut RNG,
     ) -> Result<ServerState<P>, MpcError> {
         let sfhe: ServerFHE = crate::server_keygen(reader)?;
 
@@ -320,11 +316,11 @@ where
                         s2.spawn(|_| {
                             // ACG/Garbling
                             let result = NNProtocol::offline_server_acg(
-                                reader_3,
-                                writer_3,
+                                reader_2,
+                                writer_2,
                                 &sfhe,
                                 neural_network,
-                                rng_3,
+                                rng_2,
                             ).unwrap();
                             linear_shares = result.0;
                             mac_keys = result.1;
@@ -332,12 +328,12 @@ where
 
                         // TODO: Add timing stuff
                         let result = ReluProtocol::<P>::offline_server_garbling(
-                            writer_4,
+                            writer_3,
                             num_relu,
                             &sfhe,
                             relu_layer_sizes.as_slice(),
                             output_truncations.as_slice(),
-                            rng_4,
+                            rng_3,
                         ).unwrap();
                         gc_state = Some(result.0);
                         labels = result.1;
@@ -377,19 +373,11 @@ where
 
                     let rands = Arc::new(Mutex::new(rands));
                     let mpc = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
-                    let mpc_2 = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
-                    let mpc_3 = ServerMPC::new(rands, triples.clone(), mac_key);
                     ReluProtocol::<P>::offline_server_cds(
                         reader_2,
                         writer_2,
-                        reader_3,
-                        writer_3,
-                        reader_4,
-                        writer_4,
                         &sfhe,
                         mpc,
-                        mpc_2,
-                        mpc_3,
                         relu_layer_sizes.as_slice(),
                         output_mac_keys.as_slice(),
                         output_mac_shares.as_slice(),
@@ -526,13 +514,9 @@ where
         reader_2: &mut IMuxAsync<R>,
         writer_2: &mut IMuxAsync<W>,
         reader_3: &mut IMuxAsync<R>,
-        writer_3: &mut IMuxAsync<W>,
-        reader_4: &mut IMuxAsync<R>,
-        writer_4: &mut IMuxAsync<W>,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
         rng_2: &mut RNG,
-        rng_3: &mut RNG,
     ) -> Result<ClientState<P>, MpcError> {
         let cfhe: ClientFHE = crate::client_keygen(writer)?;
 
@@ -607,11 +591,11 @@ where
                         s2.spawn(|_| {
                             // ACG/Garbling
                             let result = NNProtocol::offline_client_acg(
-                                reader_3,
-                                writer_3,
+                                reader_2,
+                                writer_2,
                                 &cfhe,
                                 neural_network_architecture,
-                                rng_3,
+                                rng_2,
                             )
                             .unwrap();
                             in_shares = result.0;
@@ -619,8 +603,7 @@ where
                         });
 
                         gc_state = Some(
-                            ReluProtocol::<P>::offline_client_garbling(reader_4, num_relu)
-                                .unwrap(),
+                            ReluProtocol::<P>::offline_client_garbling(reader_3, num_relu).unwrap(),
                         );
                     });
 
@@ -664,27 +647,19 @@ where
                     // CDS
                     let rands = Arc::new(Mutex::new(rands));
                     let mpc = ClientMPC::new(rands.clone(), triples.clone());
-                    let mpc_2 = ClientMPC::new(rands.clone(), triples.clone());
-                    let mpc_3 = ClientMPC::new(rands, triples.clone());
                     let gc_state = gc_state.as_mut().unwrap();
                     ReluProtocol::<P>::offline_client_cds(
                         reader_2,
                         writer_2,
-                        reader_3,
-                        writer_3,
-                        reader_4,
-                        writer_4,
                         &cfhe,
                         mpc,
-                        mpc_2,
-                        mpc_3,
                         gc_state,
                         relu_layer_sizes.as_slice(),
                         output_mac_shares.as_slice(),
                         output_shares.as_slice(),
                         input_mac_shares.as_slice(),
                         input_rands.as_slice(),
-                        rng_3,
+                        rng_2,
                     )
                     .unwrap();
                 });

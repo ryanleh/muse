@@ -26,7 +26,6 @@ fn main() {
     let mut rng = ChaChaRng::from_seed(RANDOMNESS);
     let mut rng_2 = ChaChaRng::from_seed(RANDOMNESS);
     let mut rng_3 = ChaChaRng::from_seed(RANDOMNESS);
-    let mut rng_4 = ChaChaRng::from_seed(RANDOMNESS);
     let args = get_args();
 
     let port = args.value_of("port").unwrap_or("8000");
@@ -40,6 +39,5 @@ fn main() {
         &mut rng,
         &mut rng_2,
         &mut rng_3,
-        &mut rng_4,
     );
 }
