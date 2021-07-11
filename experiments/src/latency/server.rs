@@ -18,14 +18,8 @@ use neural_network::{
 };
 use num_traits::identities::Zero;
 use protocols::{
-    client_keygen,
-    cds::*,
-    gc::ServerGcMsgSend,
-    linear_layer::LinearProtocol,
-    mpc::*,
-    mpc_offline::*,
-    neural_network::NNProtocol,
-    server_keygen,
+    cds::*, client_keygen, gc::ServerGcMsgSend, linear_layer::LinearProtocol, mpc::*,
+    mpc_offline::*, neural_network::NNProtocol, server_keygen,
 };
 use protocols_sys::{server_acg, SealClientACG, SealServerACG, ServerACG, ServerFHE};
 use rand::{CryptoRng, RngCore};
@@ -34,9 +28,8 @@ use rayon::ThreadPoolBuilder;
 use scuttlebutt::Block;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, Condvar},
+    sync::{Arc, Condvar, Mutex},
 };
-
 
 use async_std::{
     io::{BufReader, BufWriter, Write},
@@ -109,10 +102,16 @@ pub fn server_connect_4(
             readers_4.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_4.push(CountingIO::new(BufWriter::new(stream)));
         }
-        (IMuxAsync::new(readers), IMuxAsync::new(writers),
-         IMuxAsync::new(readers_2), IMuxAsync::new(writers_2),
-         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3),
-         IMuxAsync::new(readers_4), IMuxAsync::new(writers_4))
+        (
+            IMuxAsync::new(readers),
+            IMuxAsync::new(writers),
+            IMuxAsync::new(readers_2),
+            IMuxAsync::new(writers_2),
+            IMuxAsync::new(readers_3),
+            IMuxAsync::new(writers_3),
+            IMuxAsync::new(readers_4),
+            IMuxAsync::new(writers_4),
+        )
     })
 }
 
@@ -125,9 +124,33 @@ pub fn nn_server<R: RngCore + CryptoRng + Send>(
     rng_4: &mut R,
 ) {
     let (server_offline_state, offline_read, offline_write) = {
-        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, mut writer_3, _, mut writer_4) = server_connect_4(server_addr);
+        let (
+            mut reader,
+            mut writer,
+            mut reader_2,
+            mut writer_2,
+            mut reader_3,
+            mut writer_3,
+            mut reader_4,
+            mut writer_4,
+        ) = server_connect_4(server_addr);
         (
-            NNProtocol::offline_server_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut reader_3, &mut writer_3, &mut writer_4, &nn, rng, rng_2, rng_3, rng_4).unwrap(),
+            NNProtocol::offline_server_protocol(
+                &mut reader,
+                &mut writer,
+                &mut reader_2,
+                &mut writer_2,
+                &mut reader_3,
+                &mut writer_3,
+                &mut reader_4,
+                &mut writer_4,
+                &nn,
+                rng,
+                rng_2,
+                rng_3,
+                rng_4,
+            )
+            .unwrap(),
             reader.count(),
             writer.count(),
         )
@@ -170,13 +193,7 @@ pub fn acg<R: RngCore + CryptoRng>(
     let mac_key = F::uniform(rng);
     reader.reset();
 
-    let _ = NNProtocol::offline_server_acg(
-        &mut reader,
-        &mut writer,
-        &sfhe,
-        &nn,
-        rng
-    ).unwrap();
+    let _ = NNProtocol::offline_server_acg(&mut reader, &mut writer, &sfhe, &nn, rng).unwrap();
 
     add_to_trace!(|| "Communication", || format!(
         "Read {} bytes\nWrote {} bytes",
@@ -202,8 +219,9 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
         &sfhe,
         layers,
         output_truncations.as_slice(),
-        rng
-    ).unwrap();
+        rng,
+    )
+    .unwrap();
     timer_end!(garble_time);
     add_to_trace!(|| "Communication", || format!(
         "Read {} bytes\nWrote {} bytes",
@@ -233,7 +251,16 @@ pub fn triples_gen<R: RngCore + CryptoRng>(server_addr: &str, num: usize, rng: &
 }
 
 pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let (mut reader, mut writer) = server_connect(server_addr);
+    let (
+        mut reader,
+        mut writer,
+        mut reader_2,
+        mut writer_2,
+        mut reader_3,
+        mut writer_3,
+        mut reader_4,
+        mut writer_4,
+    ) = server_connect_4(server_addr);
 
     // Keygen
     let sfhe = server_keygen(&mut reader).unwrap();
@@ -261,18 +288,25 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
     let gen = InsecureServerOfflineMPC::new(&sfhe, mac_key.into_repr().0);
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
     let triples = gen.triples_gen(&mut reader, &mut writer, rng, num_triples);
-    let mut mpc = ServerMPC::new(
-        rands,
-        Arc::new((Mutex::new(triples), Condvar::new())),
-        mac_key
-    );
+
+    let rands = Arc::new(Mutex::new(rands));
+    let triples = Arc::new((Mutex::new(triples), Condvar::new()));
+    let mpc = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
+    let mpc_2 = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
+    let mpc_3 = ServerMPC::new(rands.clone(), triples.clone(), mac_key);
 
     // Generate triples
     protocols::cds::CDSProtocol::<TenBitExpParams>::server_cds(
         &mut reader,
         &mut writer,
+        &mut reader_2,
+        &mut writer_2,
+        &mut reader_3,
+        &mut writer_3,
         &sfhe,
-        &mut mpc,
+        mpc,
+        mpc_2,
+        mpc_3,
         layers,
         &out_mac_keys,
         &out_mac_shares,
@@ -314,7 +348,7 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         layers.len(),
         activations,
         modulus_bits,
-        elems_per_label
+        elems_per_label,
     );
 
     // Generate rands
@@ -324,9 +358,9 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let input_time = timer_start!(|| "Input Auth");
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
     let mut mpc = ServerMPC::new(
-        rands,
+        Arc::new(Mutex::new(rands)),
         Arc::new((Mutex::new(Vec::new()), Condvar::new())),
-        mac_key
+        mac_key,
     );
 
     // Share inputs

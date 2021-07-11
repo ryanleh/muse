@@ -34,5 +34,12 @@ fn main() {
 
     let network = construct_mnist(Some(&vs.root()), 1, &mut rng);
 
-    experiments::latency::server::nn_server(&server_addr, network, &mut rng, &mut rng_2, &mut rng_3, &mut rng_4);
+    experiments::latency::server::nn_server(
+        &server_addr,
+        network,
+        &mut rng,
+        &mut rng_2,
+        &mut rng_3,
+        &mut rng_4,
+    );
 }

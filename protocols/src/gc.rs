@@ -1,3 +1,4 @@
+use crate::mpc::{ClientMPC, ServerMPC};
 use crate::{bytes, cds, error::MpcError, AdditiveShare, InMessage, OutMessage};
 use algebra::{
     fields::PrimeField,
@@ -5,7 +6,6 @@ use algebra::{
     fp_64::{Fp64, Fp64Parameters},
     BigInteger64, FpParameters, UniformRandom,
 };
-use crate::mpc::{ServerMPC, ClientMPC};
 use crypto_primitives::{
     gc::{
         fancy_garbling,
@@ -102,11 +102,17 @@ where
         R: Read + Send + Unpin,
         W: Write + Send + Unpin,
         RNG: CryptoRng + RngCore,
-    > (
+    >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
+        reader_2: &mut IMuxAsync<R>,
+        writer_2: &mut IMuxAsync<W>,
+        reader_3: &mut IMuxAsync<R>,
+        writer_3: &mut IMuxAsync<W>,
         sfhe: &ServerFHE,
-        mpc: &mut ServerMPC<P::Field>,
+        mpc: ServerMPC<P::Field>,
+        mpc_2: ServerMPC<P::Field>,
+        mpc_3: ServerMPC<P::Field>,
         layer_sizes: &[usize],
         output_mac_keys: &[P::Field],
         output_mac_shares: &[P::Field],
@@ -128,13 +134,18 @@ where
             .collect();
         let input_labels: Vec<(Block, Block)> = input_labels.into_iter().map(|(_, l)| l).collect();
 
-
         let cds_time = timer_start!(|| "CDS Protocol");
         cds::CDSProtocol::<P>::server_cds(
             reader,
             writer,
+            reader_2,
+            writer_2,
+            reader_3,
+            writer_3,
             sfhe,
             mpc,
+            mpc_2,
+            mpc_3,
             layer_sizes,
             output_mac_keys,
             output_mac_shares,
@@ -156,10 +167,7 @@ where
         Ok(())
     }
 
-    pub fn offline_server_garbling<
-        W: Write + Send + Unpin,
-        RNG: CryptoRng + RngCore,
-    >(
+    pub fn offline_server_garbling<W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
         writer: &mut IMuxAsync<W>,
         number_of_relus: usize,
         sfhe: &ServerFHE,
@@ -254,8 +262,11 @@ where
         timer_end!(send_gc_time);
 
         Ok((
-            ServerState { encoders, output_randomizers },
-            labels, 
+            ServerState {
+                encoders,
+                output_randomizers,
+            },
+            labels,
         ))
     }
 
@@ -266,8 +277,14 @@ where
     >(
         reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
+        reader_2: &mut IMuxAsync<R>,
+        writer_2: &mut IMuxAsync<W>,
+        reader_3: &mut IMuxAsync<R>,
+        writer_3: &mut IMuxAsync<W>,
         cfhe: &ClientFHE,
-        mpc: &mut ClientMPC<P::Field>,
+        mpc: ClientMPC<P::Field>,
+        mpc_2: ClientMPC<P::Field>,
+        mpc_3: ClientMPC<P::Field>,
         state: &mut ClientState,
         layer_sizes: &[usize],
         output_mac_shares: &[P::Field],
@@ -280,8 +297,14 @@ where
         let labels = cds::CDSProtocol::<P>::client_cds(
             reader,
             writer,
+            reader_2,
+            writer_2,
+            reader_3,
+            writer_3,
             cfhe,
             mpc,
+            mpc_2,
+            mpc_3,
             layer_sizes,
             output_mac_shares,
             output_shares,
@@ -304,14 +327,12 @@ where
         .cloned()
         .collect();
         timer_end!(recv_time);
-        
+
         state.client_input_labels = labels;
         Ok(())
     }
 
-    pub fn offline_client_garbling<
-        R: Read + Send + Unpin,
-    > (
+    pub fn offline_client_garbling<R: Read + Send + Unpin>(
         reader: &mut IMuxAsync<R>,
         number_of_relus: usize,
     ) -> Result<ClientState, MpcError> {

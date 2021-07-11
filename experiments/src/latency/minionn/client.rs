@@ -43,5 +43,11 @@ fn main() {
     let network = construct_minionn(Some(&vs.root()), 1, &mut rng);
     let architecture = (&network).into();
 
-    experiments::latency::client::nn_client(&server_addr, architecture, &mut rng, &mut rng_2, &mut rng_3);
+    experiments::latency::client::nn_client(
+        &server_addr,
+        architecture,
+        &mut rng,
+        &mut rng_2,
+        &mut rng_3,
+    );
 }
