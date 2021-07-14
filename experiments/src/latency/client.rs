@@ -245,14 +245,14 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
     let gen = InsecureClientOfflineMPC::new(&cfhe);
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
     let triples = gen.triples_gen(&mut reader, &mut writer, rng, num_triples);
-    let mut mpc = ClientMPC::new(rands, Arc::new((Mutex::new(triples), Condvar::new())));
 
     // Generate triples
     protocols::cds::CDSProtocol::<TenBitExpParams>::client_cds(
         reader,
         writer,
         &cfhe,
-        &mut mpc,
+        Arc::new((Mutex::new(triples), Condvar::new())),
+        Arc::new(Mutex::new(rands)),
         layers,
         &out_mac_shares,
         &out_shares,
@@ -306,7 +306,10 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     let input_time = timer_start!(|| "Input Auth");
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
-    let mut mpc = ClientMPC::new(rands, Arc::new((Mutex::new(Vec::new()), Condvar::new())));
+    let mut mpc = ClientMPC::new(
+        Arc::new(Mutex::new(rands)),
+        Arc::new((Mutex::new(Vec::new()), Condvar::new())),
+    );
 
     // Share inputs
     let share_time = timer_start!(|| "Client receiving inputs");

@@ -7,6 +7,7 @@ use algebra::{
     BigInteger64, FpParameters, UniformRandom,
 };
 use crypto_primitives::{
+    beavers_mul::Triple,
     gc::{
         fancy_garbling,
         fancy_garbling::{
@@ -14,7 +15,7 @@ use crypto_primitives::{
             Encoder, GarbledCircuit, Wire,
         },
     },
-    AuthShare, Share,
+    AuthAdditiveShare, AuthShare, Share,
 };
 use io_utils::imux::IMuxAsync;
 use itertools::interleave;
@@ -22,7 +23,11 @@ use protocols_sys::{ClientFHE, ServerFHE};
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use scuttlebutt::Block;
-use std::{convert::TryFrom, marker::PhantomData};
+use std::{
+    convert::TryFrom,
+    marker::PhantomData,
+    sync::{Arc, Condvar, Mutex},
+};
 
 use async_std::io::{Read, Write};
 
@@ -107,7 +112,9 @@ where
         mut writer: IMuxAsync<W>,
         mut writer_2: IMuxAsync<W>,
         sfhe: &ServerFHE,
-        mpc: &mut ServerMPC<P::Field>,
+        triples: Arc<(Mutex<Vec<Triple<P::Field>>>, Condvar)>,
+        rands: Arc<Mutex<Vec<AuthAdditiveShare<P::Field>>>>,
+        mac_key: P::Field,
         layer_sizes: &[usize],
         output_mac_keys: &[P::Field],
         output_mac_shares: &[P::Field],
@@ -134,7 +141,9 @@ where
             reader,
             writer,
             sfhe,
-            mpc,
+            triples,
+            rands,
+            mac_key,
             layer_sizes,
             output_mac_keys,
             output_mac_shares,
@@ -268,7 +277,8 @@ where
         mut writer: IMuxAsync<W>,
         mut reader_2: IMuxAsync<R>,
         cfhe: &ClientFHE,
-        mpc: &mut ClientMPC<P::Field>,
+        triples: Arc<(Mutex<Vec<Triple<P::Field>>>, Condvar)>,
+        rands: Arc<Mutex<Vec<AuthAdditiveShare<P::Field>>>>,
         state: &mut ClientState,
         layer_sizes: &[usize],
         output_mac_shares: &[P::Field],
@@ -282,7 +292,8 @@ where
             reader,
             writer,
             cfhe,
-            mpc,
+            triples,
+            rands,
             layer_sizes,
             output_mac_shares,
             output_shares,

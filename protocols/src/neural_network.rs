@@ -371,13 +371,14 @@ where
                         );
                     }
 
-                    let mut mpc = ServerMPC::new(rands, triples.clone(), mac_key);
                     ReluProtocol::<P>::offline_server_cds(
                         reader_2,
                         writer_2,
                         writer_3,
                         &sfhe,
-                        &mut mpc,
+                        triples.clone(),
+                        Arc::new(Mutex::new(rands)),
+                        mac_key,
                         relu_layer_sizes.as_slice(),
                         output_mac_keys.as_slice(),
                         output_mac_shares.as_slice(),
@@ -647,14 +648,14 @@ where
                     }
 
                     // CDS
-                    let mut mpc = ClientMPC::new(rands, triples.clone());
                     let gc_state = gc_state.as_mut().unwrap();
                     ReluProtocol::<P>::offline_client_cds(
                         reader_2,
                         writer_2,
                         reader_3,
                         &cfhe,
-                        &mut mpc,
+                        triples.clone(),
+                        Arc::new(Mutex::new(rands)),
                         gc_state,
                         relu_layer_sizes.as_slice(),
                         output_mac_shares.as_slice(),
