@@ -30,11 +30,7 @@ use crypto_primitives::{
 };
 
 use crate::{
-    cds::CDSProtocol,
-    gc::ReluProtocol,
-    linear_layer::LinearProtocol,
-    mpc_offline::*,
-    mpc::*
+    cds::CDSProtocol, gc::ReluProtocol, linear_layer::LinearProtocol, mpc::*, mpc_offline::*,
 };
 
 use io_utils::imux::IMuxAsync;
@@ -92,7 +88,6 @@ where
     >,
     P::Field: AuthShare,
 {
-
     /// TODO
     pub fn offline_server_acg<
         R: Read + Send + Unpin,
@@ -105,8 +100,9 @@ where
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
     ) -> Result<
-        (   
-            BTreeMap<usize,
+        (
+            BTreeMap<
+                usize,
                 (
                     Input<AuthAdditiveShare<P::Field>>,
                     Output<P::Field>,
@@ -114,7 +110,8 @@ where
                 ),
             >,
             BTreeMap<usize, (P::Field, P::Field)>,
-        ), MpcError
+        ),
+        MpcError,
     > {
         let mut linear_shares: BTreeMap<
             usize,
@@ -125,11 +122,11 @@ where
             ),
         > = BTreeMap::new();
         let mut mac_keys: BTreeMap<usize, (P::Field, P::Field)> = BTreeMap::new();
-        
+
         let linear_time = timer_start!(|| "Linear layers offline phase");
         for (i, layer) in neural_network.layers.iter().enumerate() {
             match layer {
-                Layer::NLL(NonLinearLayer::ReLU { .. }) => { }
+                Layer::NLL(NonLinearLayer::ReLU { .. }) => {}
                 Layer::LL(layer) => {
                     let (shares, keys) = match &layer {
                         LinearLayer::Conv2d { .. } | LinearLayer::FullyConnected { .. } => {
@@ -210,26 +207,25 @@ where
         Ok((linear_shares, mac_keys))
     }
 
-
     pub fn offline_server_protocol<
-        R: Read + Send + Unpin,
-        W: Write + Send + Unpin,
+        R: Read + Send + Unpin + 'static,
+        W: Write + Send + Unpin + 'static,
         RNG: CryptoRng + RngCore + Send,
     >(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
-        reader_2: &mut IMuxAsync<R>,
-        writer_2: &mut IMuxAsync<W>,
-        writer_3: &mut IMuxAsync<W>,
+        mut reader: IMuxAsync<R>,
+        mut writer: IMuxAsync<W>,
+        mut reader_2: IMuxAsync<R>,
+        mut writer_2: IMuxAsync<W>,
+        mut writer_3: IMuxAsync<W>,
         neural_network: &NeuralNetwork<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
         rng_2: &mut RNG,
         rng_3: &mut RNG,
     ) -> Result<ServerState<P>, MpcError> {
-        let sfhe: ServerFHE = crate::server_keygen(reader)?;
-        
+        let sfhe: ServerFHE = crate::server_keygen(&mut reader)?;
+
         let start_time = timer_start!(|| "Server offline phase");
-        
+
         // TODO
         let mut num_relu = 0;
         let mut num_truncations = BTreeMap::new();
@@ -243,7 +239,7 @@ where
                     let (b, c, h, w) = dims.input_dimensions();
                     let relus = b * c * h * w;
                     num_relu += relus;
-                    
+
                     // TODO
                     relu_layer_sizes.push(relus);
                     output_truncations.push(*num_truncations.get(&(i - 1)).unwrap());
@@ -283,10 +279,10 @@ where
 
         let mut linear_shares = BTreeMap::new();
         let mut mac_keys = BTreeMap::new();
-        
+
         let triples = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
-        
-        let mut labels = Vec::new(); 
+
+        let mut labels = Vec::new();
 
         let mut gc_state = None;
         let _ = rayon::scope(|s| {
@@ -297,9 +293,11 @@ where
                     let batch_size = num_triples / 4;
                     let batches = (num_triples as f64 / batch_size as f64).ceil() as usize;
                     for i in 0..batches {
-                        let triples_batch_size = std::cmp::min(batch_size, num_triples - i * batch_size);
-                        let mut triples_batch = gen.triples_gen(reader, writer, rng, triples_batch_size);
-                        
+                        let triples_batch_size =
+                            std::cmp::min(batch_size, num_triples - i * batch_size);
+                        let mut triples_batch =
+                            gen.triples_gen(&mut reader, &mut writer, rng, triples_batch_size);
+
                         // Add the batch to the vector of triples
                         let mut triples_vec = triples.0.lock().unwrap();
                         triples_vec.append(&mut triples_batch);
@@ -314,13 +312,13 @@ where
                     let mut rands = Vec::new();
                     rayon::scope(|s2| {
                         // Generate input rands
-                        rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
+                        rands = gen.rands_gen(&mut reader_2, &mut writer_2, rng_2, num_rands);
                         
                         s2.spawn(|_| {
                             // ACG/Garbling
                             let result = NNProtocol::offline_server_acg(
-                                reader_2,
-                                writer_2,
+                                &mut reader_2,
+                                &mut writer_2,
                                 &sfhe,
                                 neural_network,
                                 rng_2,
@@ -331,7 +329,7 @@ where
 
                         // TODO: Add timing stuff
                         let result = ReluProtocol::<P>::offline_server_garbling(
-                            writer_3,
+                            &mut writer_3,
                             num_relu,
                             &sfhe,
                             relu_layer_sizes.as_slice(),
@@ -377,6 +375,7 @@ where
                     ReluProtocol::<P>::offline_server_cds(
                         reader_2,
                         writer_2,
+                        writer_3,
                         &sfhe,
                         &mut mpc,
                         relu_layer_sizes.as_slice(),
@@ -391,7 +390,7 @@ where
             });
         });
         let gc_state = gc_state.unwrap();
-        
+
         // We no longer need the MACs so unwrap underlying values
         let linear_randomizers = linear_shares
             .into_iter()
@@ -411,23 +410,24 @@ where
         W: Write + Send + Unpin,
         RNG: CryptoRng + RngCore,
     >(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+        mut reader: &mut IMuxAsync<R>,
+        mut writer: &mut IMuxAsync<W>,
         cfhe: &ClientFHE,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
     ) -> Result<
-        (   
+        (
             BTreeMap<usize, Input<AuthAdditiveShare<P::Field>>>,
-            BTreeMap<usize, Output<AuthAdditiveShare<P::Field>>>
-        ), MpcError
+            BTreeMap<usize, Output<AuthAdditiveShare<P::Field>>>,
+        ),
+        MpcError,
     > {
         let mut in_shares = BTreeMap::new();
         let mut out_shares: BTreeMap<usize, Output<AuthAdditiveShare<P::Field>>> = BTreeMap::new();
         let linear_time = timer_start!(|| "Linear layers offline phase");
         for (i, layer) in neural_network_architecture.layers.iter().enumerate() {
             match layer {
-                LayerInfo::NLL(_, NonLinearLayerInfo::ReLU { .. }) => { }
+                LayerInfo::NLL(_, NonLinearLayerInfo::ReLU { .. }) => {}
                 LayerInfo::LL(dims, linear_layer_info) => {
                     let input_dims = dims.input_dimensions();
                     let output_dims = dims.output_dimensions();
@@ -505,21 +505,21 @@ where
     }
 
     pub fn offline_client_protocol<
-        R: Read + Send + Unpin,
-        W: Write + Send + Unpin,
+        R: Read + Send + Unpin + 'static,
+        W: Write + Send + Unpin + 'static,
         RNG: RngCore + CryptoRng + Send,
     >(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
-        reader_2: &mut IMuxAsync<R>,
-        writer_2: &mut IMuxAsync<W>,
-        reader_3: &mut IMuxAsync<R>,
+        mut reader: IMuxAsync<R>,
+        mut writer: IMuxAsync<W>,
+        mut reader_2: IMuxAsync<R>,
+        mut writer_2: IMuxAsync<W>,
+        mut reader_3: IMuxAsync<R>,
         neural_network_architecture: &NeuralArchitecture<AdditiveShare<P>, FixedPoint<P>>,
         rng: &mut RNG,
         rng_2: &mut RNG,
     ) -> Result<ClientState<P>, MpcError> {
-        let cfhe: ClientFHE = crate::client_keygen(writer)?;
-        
+        let cfhe: ClientFHE = crate::client_keygen(&mut writer)?;
+
         let start_time = timer_start!(|| "Client offline phase");
 
         // TODO
@@ -535,7 +535,7 @@ where
                     relu_layer_sizes.push(relus);
                     num_relu += relus;
                 }
-                LayerInfo::LL(dims, linear_layer_info) => { }
+                LayerInfo::LL(dims, linear_layer_info) => {}
             }
         }
 
@@ -548,16 +548,16 @@ where
             modulus_bits,
             elems_per_label,
         );
-        
+
         // Generate rands and triples
         //let gen = InsecureClientOfflineMPC::new(&cfhe);
         let gen = ClientOfflineMPC::new(&cfhe);
 
         let mut in_shares = BTreeMap::new();
         let mut out_shares = BTreeMap::new();
-        
+
         let triples = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
-        
+
         let mut gc_state = None;
         let _ = rayon::scope(|s| {
             s.spawn(|_| {
@@ -567,9 +567,11 @@ where
                     let batch_size = num_triples / 4;
                     let batches = (num_triples as f64 / batch_size as f64).ceil() as usize;
                     for i in 0..batches {
-                        let triples_batch_size = std::cmp::min(batch_size, num_triples - i * batch_size);
-                        let mut triples_batch = gen.triples_gen(reader, writer, rng, triples_batch_size);
-                        
+                        let triples_batch_size =
+                            std::cmp::min(batch_size, num_triples - i * batch_size);
+                        let mut triples_batch =
+                            gen.triples_gen(&mut reader, &mut writer, rng, triples_batch_size);
+
                         // Add the batch to the vector of triples
                         let mut triples_vec = triples.0.lock().unwrap();
                         triples_vec.append(&mut triples_batch);
@@ -584,26 +586,27 @@ where
                     let mut rands = Vec::new();
                     rayon::scope(|s2| {
                         // Generate input rands
-                        rands = gen.rands_gen(reader_2, writer_2, rng_2, num_rands);
+                        rands = gen.rands_gen(&mut reader_2, &mut writer_2, rng_2, num_rands);
 
                         s2.spawn(|_| {
                             // ACG/Garbling
                             let result = NNProtocol::offline_client_acg(
-                                reader_2,
-                                writer_2,
+                                &mut reader_2,
+                                &mut writer_2,
                                 &cfhe,
                                 neural_network_architecture,
-                                rng_2
-                            ).unwrap();
+                                rng_2,
+                            )
+                            .unwrap();
                             in_shares = result.0;
                             out_shares = result.1;
                         });
 
                         // TODO
-                        gc_state = Some(ReluProtocol::<P>::offline_client_garbling(
-                            reader_3,
-                            num_relu,
-                        ).unwrap());
+                        gc_state = Some(
+                            ReluProtocol::<P>::offline_client_garbling(&mut reader_3, num_relu)
+                                .unwrap(),
+                        );
                     });
 
                     // Preprocessing for next step with ReLUs; if a ReLU is layer i,
@@ -614,9 +617,9 @@ where
                     let mut input_rands = Vec::new();
                     let mut input_mac_shares = Vec::new();
                     for &i in &relu_layers {
-                        let output_share = out_shares
-                            .get(&(i - 1))
-                            .expect("should exist because every ReLU should be preceeded by a linear layer");
+                        let output_share = out_shares.get(&(i - 1)).expect(
+                            "should exist because every ReLU should be preceeded by a linear layer",
+                        );
                         output_shares.extend_from_slice(
                             Input::unwrap_auth_value(output_share.clone())
                                 .as_slice()
@@ -628,9 +631,9 @@ where
                                 .unwrap(),
                         );
 
-                        let input_rand = in_shares
-                            .get(&(i + 1))
-                            .expect("should exist because every ReLU should be succeeded by a linear layer");
+                        let input_rand = in_shares.get(&(i + 1)).expect(
+                            "should exist because every ReLU should be succeeded by a linear layer",
+                        );
                         input_rands.extend_from_slice(
                             Input::unwrap_auth_value(input_rand.clone())
                                 .as_slice()
@@ -649,6 +652,7 @@ where
                     ReluProtocol::<P>::offline_client_cds(
                         reader_2,
                         writer_2,
+                        reader_3,
                         &cfhe,
                         &mut mpc,
                         gc_state,
@@ -658,8 +662,9 @@ where
                         input_mac_shares.as_slice(),
                         input_rands.as_slice(),
                         rng_2,
-                    ).unwrap();
-               });
+                    )
+                    .unwrap();
+                });
             });
         });
         let mut gc_state = gc_state.unwrap();

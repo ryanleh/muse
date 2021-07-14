@@ -18,19 +18,14 @@ use crypto_primitives::{
 use io_utils::{counting::*, imux::*, threaded::*};
 use num_traits::identities::Zero;
 use protocols::{
-    client_keygen,
-    cds::CDSProtocol,
-    gc::ClientGcMsgRcv,
-    linear_layer::LinearProtocol,
-    mpc::*,
-    mpc_offline::*,
-    neural_network::NNProtocol,
+    cds::CDSProtocol, client_keygen, gc::ClientGcMsgRcv, linear_layer::LinearProtocol, mpc::*,
+    mpc_offline::*, neural_network::NNProtocol,
 };
 use protocols_sys::*;
 use rayon::ThreadPoolBuilder;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, Condvar},
+    sync::{Arc, Condvar, Mutex},
 };
 
 pub fn client_connect(
@@ -85,9 +80,14 @@ pub fn client_connect_3(
             readers_3.push(CountingIO::new(BufReader::new(stream.clone())));
             writers_3.push(CountingIO::new(BufWriter::new(stream)));
         }
-        (IMuxAsync::new(readers), IMuxAsync::new(writers),
-         IMuxAsync::new(readers_2), IMuxAsync::new(writers_2),
-         IMuxAsync::new(readers_3), IMuxAsync::new(writers_3))
+        (
+            IMuxAsync::new(readers),
+            IMuxAsync::new(writers),
+            IMuxAsync::new(readers_2),
+            IMuxAsync::new(writers_2),
+            IMuxAsync::new(readers_3),
+            IMuxAsync::new(writers_3),
+        )
     })
 }
 
@@ -105,12 +105,21 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
         .for_each(|in_i| *in_i = generate_random_number(rng).1);
 
     let (client_state, offline_read, offline_write) = {
-        let (mut reader, mut writer, mut reader_2, mut writer_2, mut reader_3, _) = client_connect_3(server_addr);
+        let (reader, writer, reader_2, writer_2, reader_3, _) = client_connect_3(server_addr);
         (
-            NNProtocol::offline_client_protocol(&mut reader, &mut writer, &mut reader_2, &mut writer_2, &mut reader_3, &architecture, rng, rng_2)
-                .unwrap(),
-            reader.count(),
-            writer.count(),
+            NNProtocol::offline_client_protocol(
+                reader,
+                writer,
+                reader_2,
+                writer_2,
+                reader_3,
+                &architecture,
+                rng,
+                rng_2,
+            )
+            .unwrap(),
+            0,
+            0,
         )
     };
 
@@ -129,16 +138,18 @@ pub fn nn_client<R: RngCore + CryptoRng + Send>(
             writer.count(),
         )
     };
-    add_to_trace!(|| "Offline Communication", || format!(
-        "Read {} bytes\nWrote {} bytes",
-        offline_read, offline_write
-    ));
+    // TODO: The multi-threading for the CDS currently requires moving the reader/writer so we
+    // can't get the communication count
+    //
+    //add_to_trace!(|| "Offline Communication", || format!(
+    //    "Read {} bytes\nWrote {} bytes",
+    //    offline_read, offline_write
+    //));
     add_to_trace!(|| "Online Communication", || format!(
         "Read {} bytes\nWrote {} bytes",
         online_read, online_write
     ));
 }
-
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
 pub fn acg<R: RngCore + CryptoRng>(
@@ -152,13 +163,8 @@ pub fn acg<R: RngCore + CryptoRng>(
     let cfhe = client_keygen(&mut writer).unwrap();
     writer.reset();
 
-    let _ = NNProtocol::offline_client_acg(
-        &mut reader,
-        &mut writer,
-        &cfhe,
-        &architecture,
-        rng,
-    ).unwrap();
+    let _ = NNProtocol::offline_client_acg(&mut reader, &mut writer, &cfhe, &architecture, rng)
+        .unwrap();
 
     add_to_trace!(|| "Communication", || format!(
         "Read {} bytes\nWrote {} bytes",
@@ -179,9 +185,10 @@ pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng
     let activations: usize = layers.iter().map(|e| *e).sum();
     let _ = protocols::gc::ReluProtocol::<TenBitExpParams>::offline_client_garbling(
         &mut reader,
-        activations
-    ).unwrap();
-   timer_end!(rcv_gc_time);
+        activations,
+    )
+    .unwrap();
+    timer_end!(rcv_gc_time);
     add_to_trace!(|| "Communication", || format!(
         "Read {} bytes\nWrote {} bytes",
         reader.count(),
@@ -233,20 +240,17 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
         modulus_bits,
         elems_per_label,
     );
-    
+
     // Generate rands and triples
     let gen = InsecureClientOfflineMPC::new(&cfhe);
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
     let triples = gen.triples_gen(&mut reader, &mut writer, rng, num_triples);
-    let mut mpc = ClientMPC::new(
-        rands,
-        Arc::new((Mutex::new(triples), Condvar::new())),
-    );
+    let mut mpc = ClientMPC::new(rands, Arc::new((Mutex::new(triples), Condvar::new())));
 
     // Generate triples
     protocols::cds::CDSProtocol::<TenBitExpParams>::client_cds(
-        &mut reader,
-        &mut writer,
+        reader,
+        writer,
         &cfhe,
         &mut mpc,
         layers,
@@ -257,11 +261,14 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
         rng,
     )
     .unwrap();
-    add_to_trace!(|| "Communication", || format!(
-        "Read {} bytes\nWrote {} bytes",
-        reader.count(),
-        writer.count()
-    ));
+    // TODO: The multi-threading for the CDS currently requires moving the reader/writer so we
+    // can't get the communication count
+    //
+    //add_to_trace!(|| "Communication", || format!(
+    //    "Read {} bytes\nWrote {} bytes",
+    //    reader.count(),
+    //    writer.count()
+    //));
 }
 
 pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
@@ -291,7 +298,7 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         layers.len(),
         activations,
         modulus_bits,
-        elems_per_label
+        elems_per_label,
     );
 
     // Generate rands
@@ -299,11 +306,8 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     let input_time = timer_start!(|| "Input Auth");
     let rands = gen.rands_gen(&mut reader, &mut writer, rng, num_rands);
-    let mut mpc = ClientMPC::new(
-        rands,
-        Arc::new((Mutex::new(Vec::new()), Condvar::new())),
-    );
-    
+    let mut mpc = ClientMPC::new(rands, Arc::new((Mutex::new(Vec::new()), Condvar::new())));
+
     // Share inputs
     let share_time = timer_start!(|| "Client receiving inputs");
     let s_out_mac_keys = mpc

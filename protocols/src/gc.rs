@@ -1,3 +1,4 @@
+use crate::mpc::{ClientMPC, ServerMPC};
 use crate::{bytes, cds, error::MpcError, AdditiveShare, InMessage, OutMessage};
 use algebra::{
     fields::PrimeField,
@@ -5,7 +6,6 @@ use algebra::{
     fp_64::{Fp64, Fp64Parameters},
     BigInteger64, FpParameters, UniformRandom,
 };
-use crate::mpc::{ServerMPC, ClientMPC};
 use crypto_primitives::{
     gc::{
         fancy_garbling,
@@ -99,12 +99,13 @@ where
     }
 
     pub fn offline_server_cds<
-        R: Read + Send + Unpin,
-        W: Write + Send + Unpin,
+        R: Read + Send + Unpin + 'static,
+        W: Write + Send + Unpin + 'static,
         RNG: CryptoRng + RngCore,
-    > (
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+    >(
+        mut reader: IMuxAsync<R>,
+        mut writer: IMuxAsync<W>,
+        mut writer_2: IMuxAsync<W>,
         sfhe: &ServerFHE,
         mpc: &mut ServerMPC<P::Field>,
         layer_sizes: &[usize],
@@ -128,7 +129,6 @@ where
             .collect();
         let input_labels: Vec<(Block, Block)> = input_labels.into_iter().map(|(_, l)| l).collect();
 
-
         let cds_time = timer_start!(|| "CDS Protocol");
         cds::CDSProtocol::<P>::server_cds(
             reader,
@@ -149,17 +149,14 @@ where
         let send_time = timer_start!(|| "Sending carry labels");
         let tmp = vec![carry_labels];
         let send_message = ServerLabelMsgSend::new(&tmp);
-        bytes::serialize(writer, &send_message)?;
+        bytes::serialize(&mut writer_2, &send_message)?;
 
         timer_end!(send_time);
 
         Ok(())
     }
 
-    pub fn offline_server_garbling<
-        W: Write + Send + Unpin,
-        RNG: CryptoRng + RngCore,
-    >(
+    pub fn offline_server_garbling<W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
         writer: &mut IMuxAsync<W>,
         number_of_relus: usize,
         sfhe: &ServerFHE,
@@ -254,18 +251,22 @@ where
         timer_end!(send_gc_time);
 
         Ok((
-            ServerState { encoders, output_randomizers },
-            labels, 
+            ServerState {
+                encoders,
+                output_randomizers,
+            },
+            labels,
         ))
     }
 
     pub fn offline_client_cds<
-        R: Read + Send + Unpin,
-        W: Write + Send + Unpin,
+        R: Read + Send + Unpin + 'static,
+        W: Write + Send + Unpin + 'static,
         RNG: CryptoRng + RngCore,
     >(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+        mut reader: IMuxAsync<R>,
+        mut writer: IMuxAsync<W>,
+        mut reader_2: IMuxAsync<R>,
         cfhe: &ClientFHE,
         mpc: &mut ClientMPC<P::Field>,
         state: &mut ClientState,
@@ -293,7 +294,7 @@ where
 
         // Receive carry labels
         let recv_time = timer_start!(|| "Receiving carry labels");
-        let recv_msg: ClientLabelMsgRcv = bytes::deserialize(reader)?;
+        let recv_msg: ClientLabelMsgRcv = bytes::deserialize(&mut reader_2)?;
         let carry_labels: Vec<Wire> = recv_msg.msg().remove(0);
         // Interleave received labels with carry labels
         let labels = interleave(
@@ -304,14 +305,12 @@ where
         .cloned()
         .collect();
         timer_end!(recv_time);
-        
+
         state.client_input_labels = labels;
         Ok(())
     }
 
-    pub fn offline_client_garbling<
-        R: Read + Send + Unpin,
-    > (
+    pub fn offline_client_garbling<R: Read + Send + Unpin>(
         reader: &mut IMuxAsync<R>,
         number_of_relus: usize,
     ) -> Result<ClientState, MpcError> {

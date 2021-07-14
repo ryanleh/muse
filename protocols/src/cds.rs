@@ -10,7 +10,10 @@ use crypto_primitives::{
     gc::{fancy_garbling, fancy_garbling::Wire},
     PBeaversMul,
 };
-use io_utils::imux::IMuxAsync;
+use io_utils::{
+    imux::IMuxAsync,
+    threaded::{ThreadedReader, ThreadedWriter},
+};
 use itertools::{interleave, izip};
 use num_traits::{One, Zero};
 use protocols_sys::{ClientFHE, ServerFHE};
@@ -115,9 +118,9 @@ where
         fancy_garbling::util::u128_from_bits(&bits[..128]).into()
     }
 
-    fn cds_subcircuit<R, W, M>(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+    fn cds_subcircuit<W, M>(
+        reader: &mut ThreadedReader,
+        writer: &mut ThreadedWriter<W>,
         mpc: &mut M,
         modulus_bits: usize,
         elems_per_label: usize,
@@ -136,7 +139,6 @@ where
         MpcError,
     >
     where
-        R: Read + Send + Unpin,
         W: Write + Send + Unpin,
         M: MPC<P::Field, PBeaversMul<<P::Field as PrimeField>::Params>>,
     {
@@ -153,7 +155,7 @@ where
             .collect();
         // Each label share = l0 + (l1 - l0) * bit
         let l1_minus_l0 = mpc.sub(one_labels, zero_labels)?;
-        let rh = mpc.mul(
+        let rh = mpc.mul_t(
             reader,
             writer,
             l1_minus_l0.as_slice(),
@@ -202,9 +204,9 @@ where
     }
 
     // TODO: clarify that you need to preprocess enough stuff before
-    pub fn server_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+    pub fn server_cds<R, W, RNG>(
+        mut reader: IMuxAsync<R>,
+        mut writer: IMuxAsync<W>,
         sfhe: &ServerFHE,
         mpc: &mut ServerMPC<P::Field>,
         layer_sizes: &[usize],
@@ -214,7 +216,12 @@ where
         inp_mac_shares: &[P::Field],
         labels: &[(Block, Block)],
         rng: &mut RNG,
-    ) -> Result<(), MpcError> {
+    ) -> Result<(), MpcError>
+    where
+        R: Read + Send + Unpin + 'static,
+        W: Write + Send + Unpin + 'static,
+        RNG: CryptoRng + RngCore,
+    {
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         let total_size = out_mac_shares.len();
         let elems_per_label = (128.0 / (modulus_bits - 1) as f64).ceil() as usize;
@@ -230,16 +237,19 @@ where
             .unzip();
 
         // Share inputs
-        // TODO: Trim amount of randomness generated
         let share_time = timer_start!(|| "Server sharing inputs");
-        let zero_labels = mpc.private_inputs(reader, writer, zero_labels.as_slice(), rng)?;
-        let one_labels = mpc.private_inputs(reader, writer, one_labels.as_slice(), rng)?;
+        let zero_labels =
+            mpc.private_inputs(&mut reader, &mut writer, zero_labels.as_slice(), rng)?;
+        let one_labels =
+            mpc.private_inputs(&mut reader, &mut writer, one_labels.as_slice(), rng)?;
         timer_end!(share_time);
 
         // Receive client shares
         let recv_time = timer_start!(|| "Server receiving inputs");
-        let out_bits = mpc.recv_private_inputs(reader, writer, total_size * modulus_bits)?;
-        let inp_bits = mpc.recv_private_inputs(reader, writer, total_size * modulus_bits)?;
+        let out_bits =
+            mpc.recv_private_inputs(&mut reader, &mut writer, total_size * modulus_bits)?;
+        let inp_bits =
+            mpc.recv_private_inputs(&mut reader, &mut writer, total_size * modulus_bits)?;
         timer_end!(recv_time);
 
         // Check that inputs are bits
@@ -253,16 +263,37 @@ where
             .map(|b| b.sub_constant(P::Field::one()))
             .collect::<Vec<_>>();
         // Multiply
-        let out_are_bits = mpc.mul(reader, writer, &out_bits, &one_minus_out_bits)?;
-        let inp_are_bits = mpc.mul(reader, writer, &inp_bits, &one_minus_inp_bits)?;
+        let out_are_bits = mpc.mul(&mut reader, &mut writer, &out_bits, &one_minus_out_bits)?;
+        let inp_are_bits = mpc.mul(&mut reader, &mut writer, &inp_bits, &one_minus_inp_bits)?;
         // Receive opening
-        let out_are_bits = mpc.private_recv(reader, &out_are_bits)?;
-        let inp_are_bits = mpc.private_recv(reader, &inp_are_bits)?;
+        let out_are_bits = mpc.private_recv(&mut reader, &out_are_bits)?;
+        let inp_are_bits = mpc.private_recv(&mut reader, &inp_are_bits)?;
         if !(out_are_bits.iter().all(|e| e.is_zero()) && inp_are_bits.iter().all(|e| e.is_zero())) {
             return Err(MpcError::NotBits);
         }
 
         let cds_time = timer_start!(|| "CDS Protocol");
+
+        //// Calculate number of layer per thread
+        //let num_layers = layer_sizes.len();
+        //let num_threads = min(num_layers, rayon::current_num_threads() - 1);
+        //let layers_per_thread = (num_layers as f64 / num_threads as f64).ceil() as usize;
+        //// TODO: Some layers may not do all of this
+
+        let mut threaded_reader = ThreadedReader::new(reader);
+        let mut threaded_writer = ThreadedWriter::new(writer);
+
+        //rayon::scope(|s| {
+        //    for thread_idx in 0..num_threads {
+        //        let mut send = send_1.clone(); // TODO: Change name
+        //        let mut recv = recv_2.clone();
+        //        let result = result.clone();
+        //        let states = &states;
+        //        s.spawn(move |s| {
+        //        });
+        //    }
+        //});
+
         let mut processed = 0;
         let mut bits_processed = 0;
         let mut labels_processed = 0;
@@ -278,11 +309,11 @@ where
             let mut challenge_2 = P::Field::uniform(rng);
             let challenge = &[challenge_1, challenge_2];
             let send_message = InsecureMsgSend::<P>::new(challenge);
-            bytes::serialize(&mut *writer, &send_message)?;
+            bytes::serialize_t(&mut threaded_writer, &send_message).unwrap();
 
             let (label_shares, rho_1, rho_2) = CDSProtocol::<P>::cds_subcircuit(
-                reader,
-                writer,
+                &mut threaded_reader,
+                &mut threaded_writer,
                 mpc,
                 modulus_bits,
                 elems_per_label,
@@ -313,13 +344,13 @@ where
 
             // Receive opening of rho_1, rho_2
             let recv_time = timer_start!(|| "Server receiving rho");
-            let rho_open = mpc.private_recv(reader, &[rho_1, rho_2])?;
+            let rho_open = mpc.private_recv_t(&mut threaded_reader, &[rho_1, rho_2])?;
             timer_end!(recv_time);
 
             // Receive omega_1, omega_2
             // TODO: Rename insecure
             let recv_time = timer_start!(|| "Server receiving sigma");
-            let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
+            let recv_message: InsecureMsgRcv<P> = bytes::deserialize_t(&mut threaded_reader)?;
             let msg = recv_message.msg();
             let client_sigma_1 = msg[0];
             let client_sigma_2 = msg[1];
@@ -332,7 +363,7 @@ where
             // Send label shares if shares are zero and all MACs are correct
             let send_time = timer_start!(|| "Server sending label shares");
             if result_1.is_zero() && result_2.is_zero() && mpc.check_macs().is_ok() {
-                mpc.private_open(writer, label_shares.as_slice())?;
+                mpc.private_open_t(&mut threaded_writer, label_shares.as_slice())?;
             } else {
                 return Err(MpcError::InvalidMAC);
             }
@@ -347,9 +378,9 @@ where
         Ok(())
     }
 
-    pub fn client_cds<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: CryptoRng + RngCore>(
-        reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+    pub fn client_cds<R, W, RNG>(
+        mut reader: IMuxAsync<R>,
+        mut writer: IMuxAsync<W>,
         cfhe: &ClientFHE,
         mpc: &mut ClientMPC<P::Field>,
         layer_sizes: &[usize],
@@ -358,7 +389,12 @@ where
         inp_mac_shares: &[P::Field],
         inp_rands: &[P::Field],
         rng: &mut RNG,
-    ) -> Result<Vec<Wire>, MpcError> {
+    ) -> Result<Vec<Wire>, MpcError>
+    where
+        R: Read + Send + Unpin + 'static,
+        W: Write + Send + Unpin + 'static,
+        RNG: CryptoRng + RngCore,
+    {
         // TODO: Generate triples in background during linear layers
         let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         let total_size = out_mac_shares.len();
@@ -386,21 +422,21 @@ where
         // Receive server inputs
         let recv_time = timer_start!(|| "Client receiving inputs");
         let zero_labels = mpc.recv_private_inputs(
-            reader,
-            writer,
+            &mut reader,
+            &mut writer,
             2 * total_size * modulus_bits * elems_per_label,
         )?;
         let one_labels = mpc.recv_private_inputs(
-            reader,
-            writer,
+            &mut reader,
+            &mut writer,
             2 * total_size * modulus_bits * elems_per_label,
         )?;
         timer_end!(recv_time);
 
         // Share inputs
         let send_time = timer_start!(|| "Client sharing inputs");
-        let out_bits = mpc.private_inputs(reader, writer, out_bits.as_slice(), rng)?;
-        let inp_bits = mpc.private_inputs(reader, writer, inp_bits.as_slice(), rng)?;
+        let out_bits = mpc.private_inputs(&mut reader, &mut writer, out_bits.as_slice(), rng)?;
+        let inp_bits = mpc.private_inputs(&mut reader, &mut writer, inp_bits.as_slice(), rng)?;
         timer_end!(send_time);
 
         // Check that inputs are bits
@@ -408,14 +444,18 @@ where
         let one_minus_out_bits = out_bits.clone();
         let one_minus_inp_bits = inp_bits.clone();
         // Multiply
-        let out_are_bits = mpc.mul(reader, writer, &out_bits, &one_minus_out_bits)?;
-        let inp_are_bits = mpc.mul(reader, writer, &inp_bits, &one_minus_inp_bits)?;
+        let out_are_bits = mpc.mul(&mut reader, &mut writer, &out_bits, &one_minus_out_bits)?;
+        let inp_are_bits = mpc.mul(&mut reader, &mut writer, &inp_bits, &one_minus_inp_bits)?;
         // Send opening
-        mpc.private_open(writer, &out_are_bits)?;
-        mpc.private_open(writer, &inp_are_bits)?;
+        mpc.private_open(&mut writer, &out_are_bits)?;
+        mpc.private_open(&mut writer, &inp_are_bits)?;
 
         // TODO: Parallelize this
         let cds_time = timer_start!(|| "CDS Protocol");
+
+        let mut threaded_reader = ThreadedReader::new(reader);
+        let mut threaded_writer = ThreadedWriter::new(writer);
+
         let mut labels = Vec::with_capacity(total_size * (modulus_bits + 1));
         let mut processed = 0;
         let mut bits_processed = 0;
@@ -428,14 +468,14 @@ where
                 ..(labels_processed + 2 * layer_size * modulus_bits * elems_per_label);
 
             // Receive random challenges
-            let recv_message: InsecureMsgRcv<P> = bytes::deserialize(&mut *reader)?;
+            let recv_message: InsecureMsgRcv<P> = bytes::deserialize_t(&mut threaded_reader)?;
             let msg = recv_message.msg();
             let mut challenge_1 = msg[0];
             let mut challenge_2 = msg[1];
 
             let (label_shares, rho_1, rho_2) = CDSProtocol::<P>::cds_subcircuit(
-                reader,
-                writer,
+                &mut threaded_reader,
+                &mut threaded_writer,
                 mpc,
                 modulus_bits,
                 elems_per_label,
@@ -467,20 +507,20 @@ where
 
             // Send opening of rho_1, rho_2
             let open_time = timer_start!(|| "Client opening rho");
-            mpc.private_open(writer, &[rho_1, rho_2])?;
+            mpc.private_open_t(&mut threaded_writer, &[rho_1, rho_2])?;
             timer_end!(open_time);
 
             // Send sigma_1, sigma_2
             let open_time = timer_start!(|| "Client sending sigmas");
             let sigma = &[sigma_1, sigma_2];
             let send_message = InsecureMsgSend::<P>::new(sigma);
-            bytes::serialize(&mut *writer, &send_message)?;
+            bytes::serialize_t(&mut threaded_writer, &send_message)?;
             timer_end!(open_time);
 
             // Receive label shares
             let recv_time = timer_start!(|| "Client receiving label shares");
             let label_elems = mpc
-                .private_recv(reader, label_shares.as_slice())
+                .private_recv_t(&mut threaded_reader, label_shares.as_slice())
                 .map_err(|_| MpcError::CommunicationError("Server MAC check failed".to_string()))?;
             label_elems
                 .chunks(elems_per_label)
