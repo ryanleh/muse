@@ -36,7 +36,7 @@ clap = "2.33.3"
 
 async-std = "1.9.0"
 futures = "0.3.12"
-io-utils = { git = "https://github.com/ryanleh/io-utils", branch = "main" }
+io-utils = { git = "https://github.com/ryanleh/io-utils", branch = "muse-experiments" }
 
 [lib]
 name = "experiments"
