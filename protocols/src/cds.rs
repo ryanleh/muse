@@ -139,6 +139,7 @@ where
         inp_bits: &[AuthAdditiveShare<P::Field>],
         mut challenge_1: P::Field,
         mut challenge_2: P::Field,
+        triples_idx: usize,
     ) -> Result<
         (
             Vec<AuthAdditiveShare<P::Field>>,
@@ -169,6 +170,7 @@ where
             writer,
             l1_minus_l0.as_slice(),
             repeated_bits.as_slice(),
+            triples_idx
         )?;
         let label_shares = mpc.add(zero_labels, rh.as_slice())?;
         timer_end!(bit_time);
@@ -354,6 +356,7 @@ where
                     &inp_bits[bit_range],
                     challenge_1,
                     challenge_2,
+                    labels_processed,
                 )
                 .unwrap();
 
@@ -627,6 +630,7 @@ where
                     &inp_bits[bit_range],
                     challenge_1,
                     challenge_2,
+                    labels_processed,
                 )
                 .unwrap();
 
@@ -668,7 +672,7 @@ where
                         MpcError::CommunicationError("Server MAC check failed".to_string())
                     })
                     .unwrap();
-                let result: Vec<_> = label_elems
+                let result: Vec<Block> = label_elems
                     .chunks(elems_per_label)
                     .map(|e| CDSProtocol::<P>::extract_label(e, modulus_bits))
                     .collect();
@@ -678,82 +682,6 @@ where
             })
             .collect();
 
-        //        let mut labels = Vec::with_capacity(total_size * (modulus_bits + 1));
-        //        let mut processed = 0;
-        //        let mut bits_processed = 0;
-        //        let mut labels_processed = 0;
-        //        for (i, layer_size) in layer_sizes.iter().enumerate() {
-        //            let layer_time = timer_start!(|| "Client layer CDS subcircuit");
-        //            let layer_range = processed..(processed + layer_size);
-        //            let bit_range = bits_processed..(bits_processed + layer_size * modulus_bits);
-        //            let label_range = labels_processed
-        //                ..(labels_processed + 2 * layer_size * modulus_bits * elems_per_label);
-        //
-        //            // Receive random challenges
-        //            let recv_message: InsecureMsgRcv<P> = bytes::deserialize_t(&mut threaded_reader)?;
-        //            let msg = recv_message.msg();
-        //            let mut challenge_1 = msg[0];
-        //            let mut challenge_2 = msg[1];
-        //
-        //            let (label_shares, rho_1, rho_2) = CDSProtocol::<P>::cds_subcircuit(
-        //                &mut threaded_reader,
-        //                &mut threaded_writer,
-        //                &mut layer_mpc[0],
-        //                modulus_bits,
-        //                elems_per_label,
-        //                &zero_labels[label_range.clone()],
-        //                &one_labels[label_range],
-        //                &out_bits[bit_range.clone()],
-        //                &inp_bits[bit_range],
-        //                challenge_1,
-        //                challenge_2,
-        //            )?;
-        //
-        //            // TODO: Compute omega_1, omega_2
-        //            // TODO: Ensure that subcircuit does mutate these challenges
-        //            let comb_time = timer_start!(|| "Computing sigmas");
-        //            let (sigma_1, sigma_2) = izip!(
-        //                &out_mac_shares[layer_range.clone()],
-        //                &inp_mac_shares[layer_range]
-        //            )
-        //            .map(|(out_mac, inp_mac)| {
-        //                let output = (challenge_1 * *out_mac, challenge_2 * *inp_mac);
-        //                challenge_1 *= challenge_1;
-        //                challenge_2 *= challenge_2;
-        //                output
-        //            })
-        //            .fold((P::Field::zero(), P::Field::zero()), |acc, sum| {
-        //                (acc.0 + sum.0, acc.1 + sum.1)
-        //            });
-        //            timer_end!(comb_time);
-        //
-        //            // Send opening of rho_1, rho_2
-        //            let open_time = timer_start!(|| "Client opening rho");
-        //            layer_mpc[0].private_open_t(&mut threaded_writer, &[rho_1, rho_2])?;
-        //            timer_end!(open_time);
-        //
-        //            // Send sigma_1, sigma_2
-        //            let open_time = timer_start!(|| "Client sending sigmas");
-        //            let sigma = &[sigma_1, sigma_2];
-        //            let send_message = InsecureMsgSend::<P>::new(sigma);
-        //            bytes::serialize_t(&mut threaded_writer, &send_message)?;
-        //            timer_end!(open_time);
-        //
-        //            // Receive label shares
-        //            let recv_time = timer_start!(|| "Client receiving label shares");
-        //            let label_elems = layer_mpc[0]
-        //                .private_recv_t(&mut threaded_reader, label_shares.as_slice())
-        //                .map_err(|_| MpcError::CommunicationError("Server MAC check failed".to_string()))?;
-        //            label_elems
-        //                .chunks(elems_per_label)
-        //                .for_each(|e| labels.push(CDSProtocol::<P>::extract_label(e, modulus_bits)));
-        //            timer_end!(recv_time);
-        //
-        //            processed += layer_size;
-        //            bits_processed += layer_size * modulus_bits;
-        //            labels_processed += 2 * layer_size * modulus_bits * elems_per_label;
-        //            timer_end!(layer_time);
-        //        }
         timer_end!(cds_time);
         Ok(labels
             .into_iter()

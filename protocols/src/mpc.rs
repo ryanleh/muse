@@ -14,7 +14,10 @@ use itertools::izip;
 use num_traits::identities::Zero;
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
-use std::sync::{Arc, Condvar, Mutex};
+use std::{
+    iter::FromIterator,
+    sync::{Arc, Condvar, Mutex},
+};
 
 pub struct MpcProtocolType;
 
@@ -204,6 +207,7 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
         writer: &mut ThreadedWriter<W>,
         x: &[AuthAdditiveShare<T>],
         y: &[AuthAdditiveShare<T>],
+        triples_idx: usize,
     ) -> Result<Vec<AuthAdditiveShare<T>>, MpcError> {
         if x.len() != y.len() {
             return Err(MpcError::MismatchedInputLength {
@@ -212,7 +216,7 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
             });
         }
         // Consume necessary triples
-        let triples = self.get_triples(x.len())?;
+        let triples = self.get_triples_idx(triples_idx, x.len())?;
 
         // Compute blinded shares using the triples.
         let self_blinded_and_shared = izip!(x.iter(), y.iter(), triples.iter())
@@ -309,6 +313,10 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
 
     /// Blocks until `num` rands are available and returns them.
     fn get_rands(&mut self, num: usize) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
+
+    fn get_triples_idx(&self, idx: usize, num: usize) -> Result<Vec<Triple<T>>, MpcError>;
+
+    fn get_rands_idx(&self, idx: usize, num: usize) -> Result<Vec<AuthAdditiveShare<T>>, MpcError>;
 }
 
 /// Client MPC instance
@@ -526,6 +534,28 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
         let cur_length = rands.len();
         Ok(rands.split_off(cur_length - num))
     }
+
+    fn get_triples_idx(&self, idx: usize, num: usize) -> Result<Vec<Triple<Fp64<P>>>, MpcError> {
+        // TODO: This copy is going to be very expensive
+        // Wait until the lock is free and there are enough triples
+        let (mutex, cvar) = &*self.triples;
+        let mut triples = cvar
+            .wait_while(mutex.lock().unwrap(), |triples| triples.len() < (idx + num))
+            .unwrap();
+
+        Ok(Vec::from_iter(triples[idx..idx+num].iter().cloned()))
+    }
+
+    fn get_rands_idx(&self, idx: usize, num: usize) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
+        let mut rands = self.rands.lock().unwrap();
+        if rands.len() < (idx + num) {
+            return Err(MpcError::InsufficientRand {
+                num: rands.len(),
+                needed: num,
+            });
+        }
+        Ok(Vec::from_iter(rands[idx..idx+num].iter().cloned()))
+    }
 }
 
 impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
@@ -699,6 +729,28 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
         }
         let cur_length = rands.len();
         Ok(rands.split_off(cur_length - num))
+    }
+
+    fn get_triples_idx(&self, idx: usize, num: usize) -> Result<Vec<Triple<Fp64<P>>>, MpcError> {
+        // TODO: This copy is going to be very expensive
+        // Wait until the lock is free and there are enough triples
+        let (mutex, cvar) = &*self.triples;
+        let mut triples = cvar
+            .wait_while(mutex.lock().unwrap(), |triples| triples.len() < (idx + num))
+            .unwrap();
+
+        Ok(Vec::from_iter(triples[idx..idx+num].iter().cloned()))
+    }
+
+    fn get_rands_idx(&self, idx: usize, num: usize) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
+        let mut rands = self.rands.lock().unwrap();
+        if rands.len() < (idx + num) {
+            return Err(MpcError::InsufficientRand {
+                num: rands.len(),
+                needed: num,
+            });
+        }
+        Ok(Vec::from_iter(rands[idx..idx+num].iter().cloned()))
     }
 }
 
