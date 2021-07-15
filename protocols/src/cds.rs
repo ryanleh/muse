@@ -23,7 +23,7 @@ use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, Block, Channel};
 use std::{
     marker::PhantomData,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, RwLock},
 };
 
 use async_std::io::{Read, Write};
@@ -139,7 +139,7 @@ where
         inp_bits: &[AuthAdditiveShare<P::Field>],
         mut challenge_1: P::Field,
         mut challenge_2: P::Field,
-        triples_idx: usize,
+        layer_idx: usize,
     ) -> Result<
         (
             Vec<AuthAdditiveShare<P::Field>>,
@@ -170,7 +170,7 @@ where
             writer,
             l1_minus_l0.as_slice(),
             repeated_bits.as_slice(),
-            triples_idx
+            layer_idx
         )?;
         let label_shares = mpc.add(zero_labels, rh.as_slice())?;
         timer_end!(bit_time);
@@ -250,9 +250,10 @@ where
             .unzip();
 
         // Create an MPC object for each layer
+        let idx = Arc::new(RwLock::new(layer_sizes.len()-1));
         let mut layer_mpc: Vec<_> = layer_sizes
             .iter()
-            .map(|_| ServerMPC::new(rands.clone(), triples.clone(), mac_key))
+            .map(|_| ServerMPC::new(rands.clone(), triples.clone(), mac_key, idx.clone()))
             .collect();
 
         // Share inputs
@@ -356,7 +357,7 @@ where
                     &inp_bits[bit_range],
                     challenge_1,
                     challenge_2,
-                    labels_processed,
+                    i,
                 )
                 .unwrap();
 
@@ -537,9 +538,10 @@ where
             .collect();
 
         // Create an MPC object for each layer
+        let idx = Arc::new(RwLock::new(layer_sizes.len()-1));
         let mut layer_mpc: Vec<_> = layer_sizes
             .iter()
-            .map(|_| ClientMPC::new(rands.clone(), triples.clone()))
+            .map(|_| ClientMPC::new(rands.clone(), triples.clone(), idx.clone()))
             .collect();
 
         // Receive server inputs
@@ -630,7 +632,7 @@ where
                     &inp_bits[bit_range],
                     challenge_1,
                     challenge_2,
-                    labels_processed,
+                    i,
                 )
                 .unwrap();
 

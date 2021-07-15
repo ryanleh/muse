@@ -16,7 +16,7 @@ use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use std::{
     iter::FromIterator,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, RwLock},
 };
 
 pub struct MpcProtocolType;
@@ -323,7 +323,7 @@ pub trait MPC<T: AuthShare, M: BeaversMul<T>>: Send + Sync {
 pub struct ClientMPC<T: AuthShare> {
     rands: Arc<Mutex<Vec<AuthAdditiveShare<T>>>>,
     triples: Arc<(Mutex<Vec<Triple<T>>>, Condvar)>,
-    idx: usize,
+    idx: Arc<RwLock<usize>>,
 }
 
 /// Server MPC instance
@@ -333,15 +333,16 @@ pub struct ServerMPC<T: AuthShare> {
     mac_key: <T as Share>::Ring,
     /// Opened auth_shares with unchecked MACs
     unchecked: Vec<AuthAdditiveShare<T>>,
-    idx: usize,
+    idx: Arc<RwLock<usize>>,
 }
 
 impl<P: Fp64Parameters> ClientMPC<Fp64<P>> {
     pub fn new(
         rands: Arc<Mutex<Vec<AuthAdditiveShare<Fp64<P>>>>>,
         triples: Arc<(Mutex<Vec<Triple<Fp64<P>>>>, Condvar)>,
+        idx: Arc<RwLock<usize>>,
     ) -> Self {
-        Self { rands, triples, idx: 0 }
+        Self { rands, triples, idx }
     }
 }
 
@@ -350,13 +351,14 @@ impl<P: Fp64Parameters> ServerMPC<Fp64<P>> {
         rands: Arc<Mutex<Vec<AuthAdditiveShare<Fp64<P>>>>>,
         triples: Arc<(Mutex<Vec<Triple<Fp64<P>>>>, Condvar)>,
         mac_key: <Fp64<P> as Share>::Ring,
+        idx: Arc<RwLock<usize>>,
     ) -> Self {
         Self {
             rands,
             triples,
             mac_key,
             unchecked: Vec::with_capacity(Self::BATCH_SIZE * 100),
-            idx: 0,
+            idx,
         }
     }
 
@@ -539,16 +541,33 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     }
 
     fn get_triples_idx(&mut self, idx: usize, num: usize) -> Result<Vec<Triple<Fp64<P>>>, MpcError> {
-        // TODO: This copy is going to be very expensive
         // Wait until the lock is free and there are enough triples
         let (mutex, cvar) = &*self.triples;
         let mut triples = cvar
-            .wait_while(mutex.lock().unwrap(), |triples| self.idx != idx && triples.len() < num)
+            .wait_while(mutex.lock().unwrap(), |triples| {
+                let correct_layer = *self.idx.read().unwrap() == idx;
+                let correct_size = num <= triples.len();
+                println!(
+                    "{} = {}, {} < {} ==> {}",
+                    *self.idx.read().unwrap(), 
+                    idx,
+                    triples.len(),
+                    num,
+                    !(correct_layer && correct_size));
+                !(correct_layer && correct_size)
+            })
             .unwrap();
 
         let new_triples = triples.split_off(num);
         let result = std::mem::replace(&mut *triples, new_triples);
-        self.idx += num;
+
+        let mut idx = self.idx.write().unwrap();
+        *idx -= 1;
+       
+        drop(idx);
+        drop(triples);
+        cvar.notify_all();
+        println!("DONE");
 
         Ok(result)
     }
@@ -739,16 +758,33 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     }
 
     fn get_triples_idx(&mut self, idx: usize, num: usize) -> Result<Vec<Triple<Fp64<P>>>, MpcError> {
-        // TODO: This copy is going to be very expensive
         // Wait until the lock is free and there are enough triples
         let (mutex, cvar) = &*self.triples;
         let mut triples = cvar
-            .wait_while(mutex.lock().unwrap(), |triples| self.idx != idx && triples.len() < num)
+            .wait_while(mutex.lock().unwrap(), |triples| {
+                let correct_layer = *self.idx.read().unwrap() == idx;
+                let correct_size = num <= triples.len();
+                println!(
+                    "{} = {}, {} < {} ==> {}",
+                    *self.idx.read().unwrap(), 
+                    idx,
+                    triples.len(),
+                    num,
+                    !(correct_layer && correct_size));
+                !(correct_layer && correct_size)
+            })
             .unwrap();
 
         let new_triples = triples.split_off(num);
         let result = std::mem::replace(&mut *triples, new_triples);
-        self.idx += num;
+
+        let mut idx = self.idx.write().unwrap();
+        *idx -= 1;
+
+        drop(idx);
+        drop(triples);
+        cvar.notify_all();
+        println!("DONE");
 
         Ok(result)
     }

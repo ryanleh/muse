@@ -28,7 +28,7 @@ use rayon::ThreadPoolBuilder;
 use scuttlebutt::Block;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, RwLock},
 };
 
 use async_std::{
@@ -317,6 +317,7 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
         Arc::new((Mutex::new(rands))),
         Arc::new((Mutex::new(Vec::new()), Condvar::new())),
         mac_key,
+        Arc::new(RwLock::new(0)),
     );
 
     // Share inputs

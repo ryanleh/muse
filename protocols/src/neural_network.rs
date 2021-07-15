@@ -301,7 +301,7 @@ where
                         // Add the batch to the vector of triples
                         let mut triples_vec = triples.0.lock().unwrap();
                         triples_vec.append(&mut triples_batch);
-                        triples.1.notify_one();
+                        triples.1.notify_all();
                     }
                 });
             });
@@ -576,7 +576,7 @@ where
                         // Add the batch to the vector of triples
                         let mut triples_vec = triples.0.lock().unwrap();
                         triples_vec.append(&mut triples_batch);
-                        triples.1.notify_one();
+                        triples.1.notify_all();
                     }
                 });
             });

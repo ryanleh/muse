@@ -25,7 +25,7 @@ use protocols_sys::*;
 use rayon::ThreadPoolBuilder;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, RwLock},
 };
 
 pub fn client_connect(
@@ -309,6 +309,7 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
     let mut mpc = ClientMPC::new(
         Arc::new(Mutex::new(rands)),
         Arc::new((Mutex::new(Vec::new()), Condvar::new())),
+        Arc::new(RwLock::new(0)),
     );
 
     // Share inputs
