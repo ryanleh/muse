@@ -161,6 +161,12 @@ where
         bytes::serialize(&mut writer_2, &send_message)?;
 
         timer_end!(send_time);
+        
+        // TODO
+        input_labels[..100]
+            .iter()
+            .enumerate()
+            .for_each(|(i, (z, o))| println!("{} --> 0: {:?}, 1: {:?}", i, z, o));
 
         Ok(())
     }
@@ -303,6 +309,11 @@ where
         )?;
         timer_end!(cds_time);
 
+        labels[..100]
+            .iter()
+            .enumerate()
+            .for_each(|(i, w)| println!("{} --> {:?}", i, w));
+
         // Receive carry labels
         let recv_time = timer_start!(|| "Receiving carry labels");
         let recv_msg: ClientLabelMsgRcv = bytes::deserialize(&mut reader_2)?;
@@ -316,6 +327,8 @@ where
         .cloned()
         .collect();
         timer_end!(recv_time);
+
+        // TODO
 
         state.client_input_labels = labels;
         Ok(())
