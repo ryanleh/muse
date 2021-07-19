@@ -163,10 +163,13 @@ where
         timer_end!(send_time);
         
         // TODO
-        input_labels[..100]
+        layer_sizes
             .iter()
-            .enumerate()
-            .for_each(|(i, (z, o))| println!("{} --> 0: {:?}, 1: {:?}", i, z, o));
+            .for_each(|n| {
+                for i in 0..100 {
+                    println!("{} --> 0: {:?}, 1: {:?}", n + i, input_labels[n+i].0, input_labels[n+i].1)
+                }
+            });
 
         Ok(())
     }
@@ -309,10 +312,13 @@ where
         )?;
         timer_end!(cds_time);
 
-        labels[..100]
+        layer_sizes
             .iter()
-            .enumerate()
-            .for_each(|(i, w)| println!("{} --> {:?}", i, w));
+            .for_each(|n| {
+                for i in 0..100 {
+                    println!("{} --> {:?}", n + i, labels[n+i])
+                }
+            });
 
         // Receive carry labels
         let recv_time = timer_start!(|| "Receiving carry labels");
