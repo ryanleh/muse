@@ -4,7 +4,7 @@ ___Muse___ is a Python, C++, and Rust library for **Secure Convolutional Neural 
 
 This library was initially developed as part of the paper *"[Muse: Secure Inference Reslient to Malicious Clients][muse]"*, and is released under the MIT License and the Apache v2 License (see [License](#license)).
 
-**WARNING:** This is an academic proof-of-concept prototype, and in particular has not received careful code review. Several components necessary for full security (but which don't affect benchmarks) are not currently implemented. Consequently, this implementation is NOT ready for production use.
+**WARNING:** This is an academic proof-of-concept prototype, and in particular has not received careful code review. Several components necessary for full security (but which don't affect benchmarks) are not fully implemented. Consequently, this implementation is NOT ready for production use.
 
 ## Overview
 
@@ -168,7 +168,7 @@ This will write out a trace to `./mnist.txt`.  Note that the pre-processing phas
 
 #### Figures 8 and 9
 
-End-to-end experiments are currently implemented in the `end-to-end` branch (a few bugs on certain system setups are keeping this branch from being merged with `main` - these should be resolved soon).
+End-to-end experiments are currently implemented in the `end-to-end` branch (some bugs exist which are keeping this branch from being merged with `main` - these should be resolved soon).
 
 To run these experiments, use the same commands described in the `Online phase` section above.
 
@@ -195,4 +195,4 @@ This work was supported by:
 the National Science Foundation;
 and donations from Sloan Foundation, Bakar and Hellman Fellows Fund, Alibaba, Amazon Web Services, Ant Financial, Arm, Capital One, Ericsson, Facebook, Google, Intel, Microsoft, Scotiabank, Splunk and VMware
 
-Some parts of the finite field arithmetic infrastructure in the `algebra` crate have been adapted from code in the [`algebra`](https://github.com/scipr-lab/zexe) crate.
+Some parts of the finite field arithmetic infrastructure in the `algebra` crate have been adapted from code in the [`algebra`](https://github.com/arkworks-rs/snark) crate.
