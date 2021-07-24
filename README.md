@@ -4,7 +4,7 @@ ___Muse___ is a Python, C++, and Rust library for **Secure Convolutional Neural 
 
 This library was initially developed as part of the paper *"[Muse: Secure Inference Reslient to Malicious Clients][muse]"*, and is released under the MIT License and the Apache v2 License (see [License](#license)).
 
-**WARNING:** This is an academic proof-of-concept prototype, and in particular has not received careful code review. Several components necessary for full security (but which don't affect benchmarks) are not fully implemented. Consequently, this implementation is NOT ready for production use.
+**WARNING:** This is an academic proof-of-concept prototype, and in particular has not received careful code review. Several components necessary for full security (but which don't affect benchmarks) are not completely implemented. Consequently, this implementation is NOT ready for production use.
 
 ## Overview
 
