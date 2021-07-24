@@ -2,68 +2,66 @@
 
 ___Muse___ is a Python, C++, and Rust library for **Secure Convolutional Neural Network Inference for Malicious Clients**. 
 
+This library was initially developed as part of the paper *"[Muse: Secure Inference Reslient to Malicious Clients][muse]"*, and is released under the MIT License and the Apache v2 License (see [License](#license)).
+
 **WARNING:** This is an academic proof-of-concept prototype, and in particular has not received careful code review. This implementation is NOT ready for production use.
 
 ## Overview
 
-This library implements the components of a cryptographic system for efficient client-malicious inference on general convolutional neural networks.
+This library implements the components of a cryptographic system for efficient client-malicious inference on general convolutional neural networks as well as a model-extraction attack against semi-honest secure inference protocols based on additive secret sharing.
 
-**The end-to-end protocol is not yet implemented**. In particular, the following components are missing:
-* TopGear zero-knowledge proof integration (latency costs are currently simulated)
-* Components are not currently run in parallel
-
-The rest of this README will walk through running experiments for the various components of Muse to reproduce the results in Table 3 and Figures 8, 9, and 10.
-
-Note that the implementation has changed slightly since the submission, so some of the numbers may be off by a small margin. Additionally, these micro-benchmarks do not include the communication cost of the zero-knowledge proofs.
+These constructions utilize an array of multi-party computation and machine-learning techniques, as described in the [Muse paper][muse].
 
 ## Directory structure
 
-This repository contains several folders that implement the different building blocks of MUSE. The high-level structure of the repository is as follows.
-* [`python`](python): Example Python scripts for performing neural architecture search (NAS)
+This repository contains several folders that implement the different building blocks of Muse. The high-level structure of the repository is as follows.
+* [`python`](python): Python scripts for the model-extraction attack
 
 * [`rust/algebra`](rust/algebra): Rust crate that provides finite fields
 
 * [`rust/crypto-primitives`](rust/crypto-primitives): Rust crate that implements some useful cryptographic primitives
 
-* [`rust/experiments`](rust/experiments): Rust crate for running latency, bandwidth, throughput, accuracy, and memory usage experiments
+* [`rust/experiments`](rust/experiments): Rust crate for running latency and communication experiments
 
 * [`rust/neural-network`](rust/neural-network): Rust crate that implements generic neural networks
 
 * [`rust/protocols`](rust/protocols): Rust crate that implements cryptographic protocols
 
-* [`rust/protocols-sys`](rust/crypto-primitives): Rust crate that provides the C++ backend for MUSE's pre-processing phase and an FFI for the backend
+* [`rust/protocols-sys`](rust/crypto-primitives): Rust crate that provides the C++ backend for Muse's pre-processing phase and an FFI for the backend
 
-In addition, there is a  [`rust/bench-utils`](rust/bench-utils) crate which contains infrastructure for benchmarking. This crate includes macros for timing code segments and is used for profiling the building blocks of MUSE.
+# TODO: Have instructions for attack
 
-## Setup
+## Build guide
 
-### Local setup
-
-If you'd like to compile and run experiments locally, please first install [rustup](https://rustup.rs/), and then install the latest Rust nightly as follows:
+The library compiles on the `nightly` toolchain of the Rust compiler. To install the latest version of Rust, first install `rustup` by following the instructions [here](https://rustup.rs/), or via your platform's package manager. Once `rustup` is installed, install the Rust toolchain by invoking:
 ```bash
 rustup install nightly
 ```
+
 Additionally, you will need to have the GCC, G++, pkg-config, OpenSSL, CMake, and Clang packages. On Ubuntu, these can be installed via:
 ```bash
 sudo apt install pkg-config libssl-dev cmake g++ libclang-dev
 ```
-Note that this is only necessary if you are *not* using the AWS image.
 
-### Instance setup
+After that, use `cargo`, the standard Rust build tool, to build the library:
+```bash
+git clone https://github.com/mc2-project/muse
+cd muse/rust
+cargo +nightly build --release
+```
 
-To enable running our code on AWS EC2 machines, we have created an Amazon Machine Image (AMI) that already contains an installation of Rust, as well as a copy of this code.
-
-The ID of this AMI is ami-01421496a8ce0c211.
-
-To set up an EC2 machine with our AMI, follow the instructions outlined [here](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/launching-instance.html), and, in Step 1, enter the AMI ID in the search bar and select "Community AMI".
-
-To replicate our results from the paper, both the client and the server must be c5.9xlarge instances, and the region for the client machine should be us-west-1, while the region for the server should be us-west-2.
+This library comes with unit and integration tests for each of the provided crates. Run these tests with:
+```bash
+cargo +nightly test
+``` 
 
 ### Experiments
 
-First, make sure the repository is up to date (we will push any bug fixes) via `git pull origin main`.  Next, run `cd rust/experiments` to switch to the crate containing our benchmarks.
+The rest of this README will explain how to run experiments on the various components of Muse in order to reproduce the results provided in the paper.
 
-#### Table 3/Figure 10
+# TODO: Consider leaving a warning here about what stuff is implemented
+
+#### Tables 3/4 and Figure 10
 
 ##### Authenticated correlations generator (ACG)
 
@@ -172,7 +170,9 @@ This will write out a trace to `./mnist.txt`.  Note that the pre-processing phas
 
 #### Figures 8 and 9
 
-In the future, MUSE will run Triple Generation in parallel with ACG, Garbling, and Input Authentication. Thus to estimate the latency of the pre-processing phase, compute the result of `max(triple_time, acg_time + garbling_time + input_auth_time) + cds_time`. Once you have calculated that value, you will be able to reconstruct both Figure 8 and 9 using the numbers from before.
+End-to-end experiments are currently implemented in the `end-to-end` branch (a few bugs on certain system setups are keeping this branch from being merged with `main` - these should be resolved soon).
+
+To run these experiments, use the same commands described in the `Online phase` section above.
 
 ## License
 
@@ -180,3 +180,21 @@ Muse is licensed under either of the following licenses, at your discretion.
 
  * Apache License Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
  * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+Unless you explicitly state otherwise, any contribution submitted for inclusion in Muse by you shall be dual licensed as above (as defined in the Apache v2 License), without any additional terms or conditions.
+
+[muse]: https://www.usenix.org/system/files/sec21fall-lehmkuhl.pdf
+
+## Reference paper
+
+[_Muse: Secure Inference Resilient to Malicious Clients_][muse]    
+[Ryan Lehmkuhl](https://www.github.com/ryanleh), [Pratyush Mishra](https://www.github.com/pratyush), Akshayaram Srinivasan, and Raluca Ada Popa    
+*Usenix Security Symposium 2021*
+
+## Acknowledgements
+
+This work was supported by:
+the National Science Foundation;
+and donations from Sloan Foundation, Bakar and Hellman Fellows Fund, Alibaba, Amazon Web Services, Ant Financial, Arm, Capital One, Ericsson, Facebook, Google, Intel, Microsoft, Scotiabank, Splunk and VMware
+
+Some parts of the finite field arithmetic infrastructure in the `algebra` crate have been adapted from code in the [`algebra`](https://github.com/scipr-lab/zexe) crate.

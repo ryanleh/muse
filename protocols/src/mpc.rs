@@ -373,7 +373,7 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ClientMPC<Fp64<P>> {
     fn recv_private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin>(
         &mut self,
         reader: &mut IMuxAsync<R>,
-        writer: &mut IMuxAsync<W>,
+        _writer: &mut IMuxAsync<W>,
         num_recv: usize,
     ) -> Result<Vec<AuthAdditiveShare<Fp64<P>>>, MpcError> {
         let mut shares = Vec::with_capacity(num_recv);
@@ -464,7 +464,7 @@ impl<P: Fp64Parameters> MPC<Fp64<P>, PBeaversMul<P>> for ServerMPC<Fp64<P>> {
     /// Share `inputs` with the client
     fn private_inputs<R: Read + Send + Unpin, W: Write + Send + Unpin, RNG: RngCore + CryptoRng>(
         &mut self,
-        reader: &mut IMuxAsync<R>,
+        _reader: &mut IMuxAsync<R>,
         writer: &mut IMuxAsync<W>,
         inputs: &[Fp64<P>],
         rng: &mut RNG,
@@ -602,11 +602,8 @@ mod tests {
         task,
     };
     use crypto_primitives::beavers_mul::InsecureTripleGen;
-    use futures::{
-        stream::{FuturesUnordered, StreamExt},
-        SinkExt,
-    };
-    use io_utils::IMuxAsync;
+    use futures::stream::StreamExt;
+    use io_utils::imux::IMuxAsync;
     use num_traits::identities::Zero;
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaChaRng;

@@ -2,19 +2,15 @@ use crate::*;
 use ::neural_network::{
     layers::*,
     tensors::{Input, Output},
-    NeuralArchitecture, NeuralNetwork,
+    NeuralArchitecture,
 };
-use algebra::{fields::near_mersenne_64::F, Field, PrimeField, UniformRandom};
+use algebra::{fields::near_mersenne_64::F, PrimeField, UniformRandom};
 use async_std::{
     io::{BufReader, BufWriter},
     net::TcpStream,
-    prelude::*,
     task,
 };
-use crypto_primitives::{
-    gc::fancy_garbling::{Encoder, GarbledCircuit, Wire},
-    AuthAdditiveShare, AuthShare, Share,
-};
+use crypto_primitives::AuthAdditiveShare;
 use io_utils::{counting::CountingIO, imux::IMuxAsync};
 use num_traits::identities::Zero;
 use protocols::{
@@ -25,10 +21,7 @@ use protocols::{
     mpc_offline::{ClientOfflineMPC, OfflineMPC},
     neural_network::NNProtocol,
 };
-use protocols_sys::{
-    client_acg, server_acg, ClientACG, ClientFHE, SealClientACG, SealServerACG, ServerACG,
-    ServerFHE,
-};
+use protocols_sys::{client_acg, ClientACG, SealClientACG};
 use std::collections::BTreeMap;
 
 pub fn client_connect(
@@ -114,7 +107,7 @@ pub fn acg<R: RngCore + CryptoRng>(
     let linear_time = timer_start!(|| "Linear layers offline phase");
     for (i, layer) in architecture.layers.iter().enumerate() {
         match layer {
-            LayerInfo::NLL(dims, NonLinearLayerInfo::ReLU { .. }) => {}
+            LayerInfo::NLL(_dims, NonLinearLayerInfo::ReLU { .. }) => {}
             LayerInfo::LL(dims, linear_layer_info) => {
                 let input_dims = dims.input_dimensions();
                 let output_dims = dims.output_dimensions();
@@ -197,20 +190,10 @@ pub fn acg<R: RngCore + CryptoRng>(
 }
 
 // TODO: Pull out this functionality in `neural_network.rs` so this is clean
-pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    let (mut reader, mut writer) = client_connect(server_addr);
+pub fn garbling<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], _rng: &mut R) {
+    let (mut reader, writer) = client_connect(server_addr);
 
-    // Keygen
-    let cfhe = client_keygen(&mut writer).unwrap();
-    writer.reset();
-
-    // Generate dummy labels/layer for CDS
     let activations: usize = layers.iter().map(|e| *e).sum();
-    let out_mac_shares = vec![F::zero(); activations];
-    let out_shares = vec![F::zero(); activations];
-    let inp_mac_shares = vec![F::zero(); activations];
-    let inp_rands = vec![F::zero(); activations];
-
     let rcv_gc_time = timer_start!(|| "Receiving GCs");
     let mut gc_s = Vec::with_capacity(activations);
     let mut r_wires = Vec::with_capacity(activations);
@@ -288,15 +271,10 @@ pub fn cds<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mu
 }
 
 pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], rng: &mut R) {
-    use protocols::server_keygen;
-    use protocols_sys::{SealCT, SerialCT};
-
     let (mut reader, mut writer) = client_connect(server_addr);
 
     // Keygen
     let cfhe = client_keygen(&mut writer).unwrap();
-    let mut sfhe = server_keygen(&mut reader).unwrap();
-    reader.reset();
     writer.reset();
 
     // Generate dummy labels/layer for CDS
@@ -320,26 +298,26 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     // Share inputs
     let share_time = timer_start!(|| "Client receiving inputs");
-    let s_out_mac_keys = mpc
+    let _s_out_mac_keys = mpc
         .recv_private_inputs(&mut reader, &mut writer, layers.len())
         .unwrap();
-    let s_inp_mac_keys = mpc
+    let _s_inp_mac_keys = mpc
         .recv_private_inputs(&mut reader, &mut writer, layers.len())
         .unwrap();
-    let s_out_mac_shares = mpc
+    let _s_out_mac_shares = mpc
         .recv_private_inputs(&mut reader, &mut writer, activations)
         .unwrap();
-    let s_inp_mac_shares = mpc
+    let _s_inp_mac_shares = mpc
         .recv_private_inputs(&mut reader, &mut writer, activations)
         .unwrap();
-    let zero_labels = mpc
+    let _zero_labels = mpc
         .recv_private_inputs(
             &mut reader,
             &mut writer,
             2 * activations * modulus_bits * elems_per_label,
         )
         .unwrap();
-    let one_labels = mpc
+    let _one_labels = mpc
         .recv_private_inputs(
             &mut reader,
             &mut writer,
@@ -350,16 +328,16 @@ pub fn input_auth<R: RngCore + CryptoRng>(server_addr: &str, layers: &[usize], r
 
     // Receive client shares
     let recv_time = timer_start!(|| "Client sending inputs");
-    let out_bits = mpc
+    let _out_bits = mpc
         .private_inputs(&mut reader, &mut writer, out_shares_bits.as_slice(), rng)
         .unwrap();
-    let inp_bits = mpc
+    let _inp_bits = mpc
         .private_inputs(&mut reader, &mut writer, inp_rands_bits.as_slice(), rng)
         .unwrap();
-    let c_out_mac_shares = mpc
+    let _c_out_mac_shares = mpc
         .private_inputs(&mut reader, &mut writer, out_mac_shares.as_slice(), rng)
         .unwrap();
-    let c_inp_mac_shares = mpc
+    let _c_inp_mac_shares = mpc
         .private_inputs(&mut reader, &mut writer, inp_mac_shares.as_slice(), rng)
         .unwrap();
     timer_end!(recv_time);

@@ -42,22 +42,6 @@ io-utils = { git = "https://github.com/ryanleh/io-utils", branch = "main" }
 name = "experiments"
 path = "src/lib.rs"
 
-#[[bin]]
-#name = "minionn-inference"
-#path = "src/inference/minionn/inference.rs"
-#
-#[[bin]]
-#name = "minionn-accuracy"
-#path = "src/validation/minionn/validate.rs"
-#
-#[[bin]]
-#name = "resnet32-client"
-#path = "src/latency/resnet32/client.rs"
-#
-#[[bin]]
-#name = "resnet32-server"
-#path = "src/latency/resnet32/server.rs"
-#
 [[bin]]
 name = "minionn-client"
 path = "src/latency/minionn/client.rs"
@@ -73,15 +57,7 @@ path = "src/latency/mnist/client.rs"
 [[bin]]
 name = "mnist-server"
 path = "src/latency/mnist/server.rs"
-#
-#[[bin]]
-#name = "tput-client"
-#path = "src/throughput/linear_only/client.rs"
-#
-#[[bin]]
-#name = "tput-server"
-#path = "src/throughput/linear_only/server.rs"
-#
+
 [[bin]]
 name = "triples-gen-server"
 path = "src/latency/triples_gen/server.rs"

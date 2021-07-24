@@ -16,7 +16,7 @@ use num_traits::{One, Zero};
 use protocols_sys::{ClientFHE, ServerFHE};
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
-use scuttlebutt::{AbstractChannel, Block, Channel};
+use scuttlebutt::Block;
 use std::marker::PhantomData;
 
 use async_std::io::{Read, Write};
@@ -443,7 +443,7 @@ where
         let mut processed = 0;
         let mut bits_processed = 0;
         let mut labels_processed = 0;
-        for (i, layer_size) in layer_sizes.iter().enumerate() {
+        for layer_size in layer_sizes.iter() {
             let layer_time = timer_start!(|| "Client layer CDS subcircuit");
             let layer_range = processed..(processed + layer_size);
             let bit_range = bits_processed..(bits_processed + layer_size * modulus_bits);
@@ -631,7 +631,6 @@ where
         input_rands: &[P::Field],
         _rng: &mut RNG,
     ) -> Result<Vec<Wire>, MpcError> {
-        let modulus_bits = <P::Field as PrimeField>::size_in_bits();
         // Send everything to the server
         let send_message = InsecureMsgSend::<P>::new(&output_mac_shares);
         bytes::serialize(&mut *writer, &send_message)?;

@@ -21,7 +21,7 @@ use protocols_sys::{ClientFHE, ServerFHE};
 use rand::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use scuttlebutt::Block;
-use std::{convert::TryFrom, marker::PhantomData};
+use std::marker::PhantomData;
 
 use async_std::io::{Read, Write};
 
