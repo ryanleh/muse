@@ -15,6 +15,7 @@ These constructions utilize an array of multi-party computation and machine-lear
 ## Directory structure
 
 This repository contains several folders that implement the different building blocks of Muse. The high-level structure of the repository is as follows.
+
 * [`python`](python): Python scripts for the model-extraction attack
 
 * [`rust/algebra`](rust/algebra): Rust crate that provides finite fields
@@ -28,8 +29,6 @@ This repository contains several folders that implement the different building b
 * [`rust/protocols`](rust/protocols): Rust crate that implements cryptographic protocols
 
 * [`rust/protocols-sys`](rust/crypto-primitives): Rust crate that provides the C++ backend for Muse's pre-processing phase and an FFI for the backend
-
-# TODO: Have instructions for attack
 
 ## Build guide
 
